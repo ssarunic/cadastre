@@ -48,10 +48,9 @@ number and one tag.
 - MCP: `cadastral-mcp --transport http` serves the tools over the SDK's
   streamable HTTP transport at `http://127.0.0.1:8080/mcp` (stateless, JSON
   responses; `GET /health`), for clients that connect to a URL such as Claude
-  Code (`claude mcp add --transport http ...`) and the MCP Inspector. No
-  authentication: loopback by default, another interface is logged as a
-  warning. The placeholder SSE endpoint, `/mcp/capabilities` and the CORS
-  setting are gone; `fastapi` and `uvicorn[standard]` are no longer
+  Code (`claude mcp add --transport http ...`) and the MCP Inspector. The
+  placeholder SSE endpoint, `/mcp/capabilities` and the CORS setting are
+  gone; `fastapi` and `uvicorn[standard]` are no longer
   dependencies (the SDK brings `starlette` and `uvicorn`). The handlers run
   the SDK client in worker threads, so one slow land-registry read no longer
   stalls every other caller.
