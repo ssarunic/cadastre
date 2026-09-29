@@ -32,6 +32,23 @@ number and one tag.
   carries `fetched_at`; paging, detail levels and filters of a record already
   read make no upstream request. `CADASTRAL_CACHE` is read from the client's
   `env` block.
+- MCP: a wire budget for tool results (`specs/response-cache-specification.md`,
+  section 11). Every result is measured as the client will receive it (the
+  text block plus the structured copy) and kept under `MCP_RESULT_BUDGET_BYTES`
+  (default 800,000, under the 1 MB at which Claude Desktop and claude.ai drop
+  a result). A paged window that does not fit is cut to the largest prefix
+  that does: `limit=null` now means as many as fit, an explicit limit is
+  reduced and reported (`page.limit` applied, `page.requested_limit` asked
+  for), and `page.truncated` / `page.next_offset` say where to continue. This
+  replaces the fixed character ceilings of `get_parcel` and `get_lr_unit` and
+  guards the lists that had none (`list_municipalities`,
+  `find_parcels_in_area`, `find_parcel_neighbours`, `get_possession_sheet`,
+  the persons of `build_assembly`, `get_parcel_zoning` with polygons); a call
+  for several parcels or units divides the budget between them. Only a single
+  record that does not fit on its own is still refused, naming the smaller
+  views. `MCP_STRUCTURED_OUTPUT=off` registers the tools without
+  `structuredContent`, halving the payload for a client that reads only the
+  text.
 - SDK, MCP: `build_assembly` returns `blockers`, one row per parcel and
   counted sale blocker with the parcel, the unit and every blocker field
   (`ParcelBlocker`), the list the verdicts and counts on the parcels rest

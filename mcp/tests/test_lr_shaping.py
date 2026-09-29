@@ -4,6 +4,7 @@ Loads tools.py standalone (no MCP SDK needed) and shapes a real LR unit
 (449/21277, redacted owners) via the pure _shape_lr_unit classmethod.
 """
 
+import asyncio
 import importlib.util
 import json
 import sys
@@ -83,6 +84,27 @@ def condominium() -> LandRegistryUnitDetailed:
     return LandRegistryUnitDetailed.model_validate(raw[0] if isinstance(raw, list) else raw)
 
 
+class _UnitClient:
+    """Serves one unit whatever the reference, under the number asked for."""
+
+    def __init__(self, unit: LandRegistryUnitDetailed) -> None:
+        self.unit = unit
+
+    def get_lr_unit_detailed(self, unit_number, main_book_id=None, **kwargs):
+        if str(unit_number) == str(self.unit.lr_unit_number):
+            return self.unit
+        return self.unit.model_copy(update={"lr_unit_number": str(unit_number)})
+
+
+def _read(unit, detail, limit, offset=0, *, budget, **kwargs) -> dict:
+    """The entry get_lr_unit returns for the unit under a wire budget of ``budget`` bytes."""
+    tools = CadastralTools(_UnitClient(unit), result_budget_bytes=budget)
+    ref = {"lr_unit_number": str(unit.lr_unit_number), "main_book_id": unit.main_book_id}
+    return asyncio.run(
+        tools.get_lr_unit([ref], detail=detail, limit=limit, offset=offset, **kwargs)
+    )["results"][0]
+
+
 def _dumped_owners(shaped: dict) -> int:
     """Owner records left in a full dump, sub-shares included."""
     def walk(shares) -> int:
@@ -126,31 +148,33 @@ def test_full_is_paged_by_share_and_drops_the_shares_outside_the_window(condomin
     assert omitted == CadastralTools._count_shares(before) - CadastralTools._count_shares(shares)
 
 
-def test_a_capped_full_dump_is_still_refused_when_another_sheet_is_the_bulk(condominium) -> None:
-    # This unit's encumbrances alone overrun the ceiling, so owners_limit
-    # cannot rescue the full dump; the refusal names the sheet at fault and
-    # does not suggest owners_limit again.
-    with pytest.raises(ValueError) as excinfo:
-        CadastralTools._shape_lr_unit(condominium, "full", 5)
-    message = str(excinfo.value)
+
+def test_a_full_dump_whose_bulk_is_another_sheet_is_refused_naming_it(condominium) -> None:
+    # This unit's encumbrances alone overrun the budget, so cutting the shares
+    # window cannot rescue the full dump; the refusal names the sheet at fault
+    # and the per-sheet levels, and does not suggest a share cap.
+    entry = _read(condominium, "full", 5, budget=100_000)
+    assert entry["status"] == "error"
+    assert entry["error_type"] == "response_too_large"
+    message = entry["error"]
+    assert condominium.lr_unit_number in message
     assert "encumbrance_sheet_c" in message
     assert "owners_limit" not in message
     assert 'detail="ownership"' in message
+    assert 'detail="encumbrances"' in message and 'detail="shares"' in message
+    # The smaller views still work for the same unit under the same budget.
+    assert _read(condominium, "ownership", 3, budget=100_000)["data"]["owners_truncated"]
+    assert _read(condominium, "summary", None, budget=100_000)["data"]["summary"]
 
 
-def test_full_dump_too_large_to_return_is_refused_with_the_smaller_options(condominium) -> None:
-    with pytest.raises(ValueError) as excinfo:
-        CadastralTools._shape_lr_unit(condominium, "full", None)
-    message = str(excinfo.value)
-    assert condominium.lr_unit_number in message
-    assert "owners_limit" in message
-    assert 'detail="ownership"' in message
-    # The smaller views still work for the same unit.
-    assert CadastralTools._shape_lr_unit(condominium, "ownership", 3)["owners_truncated"] is True
-    assert CadastralTools._shape_lr_unit(condominium, "summary", None)["summary"]
 
-
-# --- paging and the per-sheet detail levels -------------------------------
+def test_a_full_dump_within_the_budget_comes_back_whole(condominium) -> None:
+    # Under the default budget the condominium's full dump (about 600 kB on
+    # the wire) is returned whole; the old 50,000-character ceiling is gone.
+    entry = _read(condominium, "full", None, budget=_tools.DEFAULT_RESULT_BUDGET_BYTES)
+    assert entry["status"] == "success"
+    assert entry["data"]["page"]["returned"] == 85
+    assert "requested_limit" not in entry["data"]["page"]
 
 
 def test_every_level_names_the_unit_and_its_office(unit) -> None:
@@ -208,11 +232,8 @@ def test_paging_reaches_a_trailing_share_without_owners() -> None:
     assert second["ownership_sheet_b"]["lr_unit_shares"][0]["order_number"] == "2"
 
 
+
 def test_shares_level_is_raw_sheet_b_paged(condominium) -> None:
-    # The condominium's list C alone overruns the full-dump ceiling, so full
-    # is refused even with limit=1; the raw sheet B is still reachable here.
-    with pytest.raises(ValueError):
-        CadastralTools._shape_lr_unit(condominium, "full", 1)
     first = CadastralTools._shape_lr_unit(condominium, "shares", 10, 0)
     sheet = first["ownership_sheet_b"]
     assert len(sheet["lr_unit_shares"]) == 10
@@ -268,18 +289,60 @@ def test_encumbrances_level_is_sheet_c_paged(condominium) -> None:
     assert last["page"]["truncated"] is False
 
 
-def test_a_paged_level_too_large_says_how_to_page_smaller(condominium) -> None:
-    with pytest.raises(ValueError) as excinfo:
-        CadastralTools._shape_lr_unit(condominium, "encumbrances", None, 0)
-    message = str(excinfo.value)
-    assert "encumbrances" in message and "limit=" in message and "offset" in message
+
+def test_a_window_over_the_budget_is_cut_to_what_fits(condominium) -> None:
+    # No limit means as many as fit: the shares window (about 460 kB on the
+    # wire whole) is cut to a prefix within budget, and the page block says
+    # where to continue and what was asked for.
+    budget = 100_000
+    data = _read(condominium, "shares", None, budget=budget)["data"]
+    page = data["page"]
+    assert 0 < page["returned"] < 85
+    assert page["limit"] == page["returned"] and page["requested_limit"] is None
+    assert page["truncated"] is True and page["next_offset"] == page["returned"]
+    assert _tools.wire_size(data) <= budget
+    # An explicit limit that does not fit is reduced the same way and reported.
+    page = _read(condominium, "shares", 50, budget=budget)["data"]["page"]
+    assert page["returned"] < 50 and page["limit"] < 50 and page["requested_limit"] == 50
+    # A limit that fits is applied as given.
+    page = _read(condominium, "shares", 5, budget=budget)["data"]["page"]
+    assert page["limit"] == 5 and page["returned"] == 5 and "requested_limit" not in page
+    # The cut pages still cover the whole sheet exactly once.
+    seen, offset = [], 0
+    while True:
+        data = _read(condominium, "shares", None, offset, budget=budget)["data"]
+        seen += [s["order_number"] for s in data["ownership_sheet_b"]["lr_unit_shares"]]
+        if not data["page"]["truncated"]:
+            break
+        offset = data["page"]["next_offset"]
+    assert seen == [s.order_number for s in condominium.ownership_sheet_b.lr_unit_shares]
 
 
-def test_refused_full_dump_names_the_per_sheet_levels(condominium) -> None:
-    with pytest.raises(ValueError) as excinfo:
-        CadastralTools._shape_lr_unit(condominium, "full", None)
-    assert 'detail="encumbrances"' in str(excinfo.value)
-    assert 'detail="shares"' in str(excinfo.value)
+def test_a_paged_level_whose_single_record_does_not_fit_is_refused(condominium) -> None:
+    # One entry group of list C is about 60 kB on the wire; under a smaller
+    # budget nothing can be cut further and the level is refused.
+    entry = _read(condominium, "encumbrances", None, budget=50_000)
+    assert entry["status"] == "error"
+    assert entry["error_type"] == "response_too_large"
+    assert "encumbrances" in entry["error"] and 'detail="summary"' in entry["error"]
+    # The same level under a budget that holds a few groups is cut, not refused.
+    data = _read(condominium, "encumbrances", None, budget=150_000)["data"]
+    assert data["page"]["truncated"] is True and 0 < data["page"]["returned"] < 30
+
+
+
+def test_several_units_share_the_budget(condominium) -> None:
+    # Two units in one call each get half the budget, so the response as a
+    # whole stays within it.
+    tools = CadastralTools(_UnitClient(condominium), result_budget_bytes=200_000)
+    ref = {"lr_unit_number": str(condominium.lr_unit_number), "main_book_id": 1}
+    other = {"lr_unit_number": "2", "main_book_id": 1}  # served as a second unit
+    res = asyncio.run(tools.get_lr_unit([ref, other], detail="shares", limit=None))
+    assert [r["status"] for r in res["results"]] == ["success", "success"]
+    assert all(_tools.wire_size(r["data"]) <= 100_000 for r in res["results"])
+    # The envelope indents every nested line, which the per-entry measure does
+    # not count; the default budget's margin under 1 MB covers that.
+    assert _tools.wire_size(res) <= 200_000 * 1.15
 
 
 ENCUMBERED = (
@@ -362,7 +425,7 @@ def test_owner_name_on_shares_keeps_the_matching_shares_whole(condominium) -> No
     assert shaped["shares_omitted"] == CadastralTools._count_shares(
         condominium.ownership_sheet_b.model_dump(mode="json")["lr_unit_shares"]
     ) - CadastralTools._count_shares(shares)
-    assert len(json.dumps(shaped, ensure_ascii=False)) <= CadastralTools.MAX_FULL_RESPONSE_CHARS
+    assert _tools.wire_size(shaped) <= _tools.DEFAULT_RESULT_BUDGET_BYTES
 
 
 def test_owner_name_on_full_filters_sheet_b_only(unit) -> None:

@@ -49,7 +49,7 @@ The AI decides when to invoke these based on user queries:
 
 **Parcel Operations:**
 - **`find_parcel`** - Find one parcel by number and municipality (parcel id, exact-match check, map link); `max_matches` returns the complete search response
-- **`get_parcel`** - Detailed cadastre record of one or more parcels. Takes a list of references (`parcel_id`, or `parcel_number` + `municipality`) and returns one entry per reference; `source` selects the register (cadastre possessors, land-registry hint, or none); `offset`/`limit` page through the possessor records of each parcel (counted across its possession sheets), `possessor_name`/`condominium_unit` filter them, with a `page` block per entry (with `fetched_at`, when the upstream sent the record) and a refusal naming a smaller limit when an entry is too large; `refresh` reads the record again instead of the copy the server keeps for 30 minutes. Each entry carries the land registry unit reference, `provenance` (register, `source_url`, `retrieved_at`) and `area_check` (cadastre, land-register and graphical areas compared); a failed entry carries `error_type` and `error_details`.
+- **`get_parcel`** - Detailed cadastre record of one or more parcels. Takes a list of references (`parcel_id`, or `parcel_number` + `municipality`) and returns one entry per reference; `source` selects the register (cadastre possessors, land-registry hint, or none); `offset`/`limit` page through the possessor records of each parcel (counted across its possession sheets), `possessor_name`/`condominium_unit` filter them, with a `page` block per entry (with `fetched_at`, when the upstream sent the record; a window over the wire budget is cut to what fits, `requested_limit` saying what was asked for, and only an entry that does not fit with a single record is refused); `refresh` reads the record again instead of the copy the server keeps for 30 minutes. Each entry carries the land registry unit reference, `provenance` (register, `source_url`, `retrieved_at`) and `area_check` (cadastre, land-register and graphical areas compared); a failed entry carries `error_type` and `error_details`.
 - **`get_parcel_geometry`** - Download and return parcel boundaries
 - **`get_parcel_zoning`** - Screening of a parcel against the spatial plans' building areas
 - **`find_parcels_in_area`** - The parcels of a municipality inside a bounding box, a polygon or a radius around a point (EPSG:3765), from the cached cadastral map: numbers, graphical areas, centroids, map links, `total_area_m2`, paged, optional GeoJSON
@@ -513,6 +513,8 @@ async def my_new_prompt(param: str) -> str:
 | `CADASTRAL_CACHE_DIR` | `~/.cadastral_api_cache` | GIS data cache directory |
 | `CADASTRAL_CACHE` | `memory` | Response cache backend: `memory` (in-process) or `off`; see [response-cache-specification.md](response-cache-specification.md) |
 | `CADASTRAL_CACHE_MEMORY_MB` | `64` | Byte budget of the memory response cache |
+| `MCP_RESULT_BUDGET_BYTES` | `800000` | Bytes one tool result may take on the wire (text plus structured copy); paged windows are cut to fit, see [response-cache-specification.md](response-cache-specification.md) section 11 |
+| `MCP_STRUCTURED_OUTPUT` | `on` | `off` registers the tools without `structuredContent`, halving the payload for clients that read only the text |
 | `MCP_HTTP_HOST` | `127.0.0.1` | HTTP server host |
 | `MCP_HTTP_PORT` | `8080` | HTTP server port |
 

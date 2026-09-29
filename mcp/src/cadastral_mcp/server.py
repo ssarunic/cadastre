@@ -50,9 +50,10 @@ Every tool takes the cadastral municipality (katastarska općina, k.o.) by
 name or code, so start with get_parcel or get_lr_unit directly; find_parcel
 is for checking which numbers exist, resolve_municipality for confirming a
 name. Building parcels are written "35/1.ZGR". Lists are paged with offset
-and limit (`page.truncated`, `page.next_offset`); pass a limit for large
-condominiums. Every record carries `provenance` (register, source_url,
-retrieved_at); pass it on with any fact you forward, and treat area_check
+and limit (`page.truncated`, `page.next_offset`); a window too large to
+return is cut to what fits (`page.requested_limit`). Every record carries
+`provenance` (register, source_url, retrieved_at); pass it on with any fact
+you forward, and treat area_check
 mismatches and `exact_match: false` as findings, not hits. Every unit carries
 `sale_blockers` (what is registered against it that bears on a sale, with a
 verdict that is a screening of the register's text, not a legal opinion) and
@@ -135,13 +136,24 @@ def create_mcp_server(
 
     # Initialize handlers
     resources_handler = CadastralResources(client)
-    tools_handler = CadastralTools(client)
+    tools_handler = CadastralTools(
+        client,
+        result_budget_bytes=config.result_budget_bytes,
+        structured_output=config.structured_output,
+    )
+    # None lets the SDK infer the output schema from the return annotation
+    # (the structured copy on); False registers text-only tools.
+    structured_output = None if config.structured_output else False
     prompts_handler = CadastralPrompts(client)
 
     logger.info(f"Initializing {config.server_name} v{config.server_version}")
     logger.info(f"API Base URL: {config.api_base_url}")
     logger.info(f"Cache Directory: {config.cache_dir}")
     logger.info(f"Response cache: {config.cache or 'memory (default)'}")
+    logger.info(
+        f"Result budget: {config.result_budget_bytes:,} bytes on the wire, structured output "
+        f"{'on' if config.structured_output else 'off'}"
+    )
 
     # ========================================================================
     # RESOURCES - Read-only contextual data
@@ -178,7 +190,7 @@ def create_mcp_server(
     # TOOLS - AI-invoked actions
     # ========================================================================
 
-    @mcp.tool()
+    @mcp.tool(structured_output=structured_output)
     @anticipated_tool
     async def find_parcel(
         parcel_number: Annotated[
@@ -245,7 +257,7 @@ def create_mcp_server(
         logger.info(f"Tool invoked: find_parcel({parcel_number}, {municipality})")
         return await tools_handler.search_parcel(parcel_number, municipality, max_matches)
 
-    @mcp.tool()
+    @mcp.tool(structured_output=structured_output)
     @anticipated_tool
     async def get_parcel(
         parcels: Annotated[
@@ -345,9 +357,9 @@ def create_mcp_server(
         of possessors on one possession sheet. With source="cadastre" page
         through them with ``limit`` and ``offset``: each entry has a ``page``
         block and ``total_possessors``; when ``page.truncated`` is true call
-        again with ``offset=page.next_offset``. An entry too large to return
-        in one response is recorded as that parcel's error naming a smaller
-        limit; do not retry it without one. On such a sheet each possessor's
+        again with ``offset=page.next_offset``. A window too large to return
+        is cut to what fits (``page.requested_limit``); only a record that
+        does not fit alone is that parcel's error. On such a sheet each possessor's
         ``ownership`` is the share of their own unit and
         ``condominium_share_ownership`` the share of the parcel; the sheet's
         ``total_ownership`` sums the latter. A person holding two units is two
@@ -395,7 +407,7 @@ def create_mcp_server(
             refresh=refresh,
         )
 
-    @mcp.tool()
+    @mcp.tool(structured_output=structured_output)
     @anticipated_tool
     async def resolve_municipality(
         name_or_code: Annotated[
@@ -426,7 +438,7 @@ def create_mcp_server(
         logger.info(f"Tool invoked: resolve_municipality({name_or_code})")
         return await tools_handler.resolve_municipality(name_or_code)
 
-    @mcp.tool()
+    @mcp.tool(structured_output=structured_output)
     @anticipated_tool
     async def list_municipalities(
         search: Annotated[
@@ -492,7 +504,7 @@ def create_mcp_server(
             search, office_id, department_id, offset, limit
         )
 
-    @mcp.tool()
+    @mcp.tool(structured_output=structured_output)
     @anticipated_tool
     async def get_parcel_geometry(
         parcel_number: Annotated[
@@ -550,7 +562,7 @@ def create_mcp_server(
         )
         return await tools_handler.get_parcel_geometry(parcel_number, municipality, format, zoom)
 
-    @mcp.tool()
+    @mcp.tool(structured_output=structured_output)
     @anticipated_tool
     async def get_parcel_zoning(
         parcel_number: Annotated[
@@ -619,7 +631,7 @@ def create_mcp_server(
             parcel_number, municipality, include_geometry, min_overlap
         )
 
-    @mcp.tool()
+    @mcp.tool(structured_output=structured_output)
     @anticipated_tool
     async def list_cadastral_offices(
         filter_name: Annotated[
@@ -643,7 +655,7 @@ def create_mcp_server(
         logger.info(f"Tool invoked: list_cadastral_offices(filter={filter_name})")
         return await tools_handler.list_cadastral_offices(filter_name)
 
-    @mcp.tool()
+    @mcp.tool(structured_output=structured_output)
     @anticipated_tool
     async def get_lr_unit(
         units: Annotated[
@@ -718,9 +730,8 @@ def create_mcp_server(
                     " block (offset, limit, total, returned, truncated, next_offset); when "
                     '`truncated` is true call again with offset=next_offset. In "shares" and '
                     '"full" the shares outside the window are dropped whole (`shares_omitted`). A'
-                    " response too large to return is reported as that unit's error naming the "
-                    "smaller options, so pass a limit whenever a unit may have many co-owners or "
-                    "encumbrances"
+                    " window too large to return is cut to what fits (`page.requested_limit`); a "
+                    "record that does not fit alone is that unit's error naming the smaller options"
                 )
             ),
         ] = None,
@@ -833,7 +844,7 @@ def create_mcp_server(
             refresh=refresh,
         )
 
-    @mcp.tool()
+    @mcp.tool(structured_output=structured_output)
     @anticipated_tool
     async def find_main_book(
         search: Annotated[
@@ -876,7 +887,7 @@ def create_mcp_server(
         logger.info(f"Tool invoked: find_main_book({search}, office={office_id})")
         return await tools_handler.find_main_book(search, office_id, institution_name)
 
-    @mcp.tool()
+    @mcp.tool(structured_output=structured_output)
     @anticipated_tool
     async def find_book_of_dc(
         search: Annotated[
@@ -919,7 +930,7 @@ def create_mcp_server(
         logger.info(f"Tool invoked: find_book_of_dc({search}, office={office_id})")
         return await tools_handler.find_book_of_dc(search, office_id, institution_name)
 
-    @mcp.tool()
+    @mcp.tool(structured_output=structured_output)
     @anticipated_tool
     async def get_possession_sheet(
         sheet_number: Annotated[
@@ -999,7 +1010,7 @@ def create_mcp_server(
             sheet_number, municipality, offset=offset, limit=limit, possessor_name=possessor_name
         )
 
-    @mcp.tool()
+    @mcp.tool(structured_output=structured_output)
     @anticipated_tool
     async def find_possession_sheet(
         sheet_number: Annotated[
@@ -1039,7 +1050,7 @@ def create_mcp_server(
         logger.info(f"Tool invoked: find_possession_sheet({sheet_number}, {municipality})")
         return await tools_handler.find_possession_sheet(sheet_number, municipality)
 
-    @mcp.tool()
+    @mcp.tool(structured_output=structured_output)
     @anticipated_tool
     async def get_file_status(
         file_number: Annotated[
@@ -1078,7 +1089,7 @@ def create_mcp_server(
         logger.info(f"Tool invoked: get_file_status({file_number}, {institution_id})")
         return await tools_handler.get_file_status(file_number, institution_id)
 
-    @mcp.tool()
+    @mcp.tool(structured_output=structured_output)
     @anticipated_tool
     async def compare_registers(
         parcels: Annotated[
@@ -1146,7 +1157,7 @@ def create_mcp_server(
             list(parcels), include_plombe_detail=include_plombe_detail
         )
 
-    @mcp.tool()
+    @mcp.tool(structured_output=structured_output)
     @anticipated_tool
     async def build_assembly(
         parcels: Annotated[
@@ -1263,7 +1274,7 @@ def create_mcp_server(
             include_blockers=include_blockers,
         )
 
-    @mcp.tool()
+    @mcp.tool(structured_output=structured_output)
     @anticipated_tool
     async def find_parcels_in_area(
         municipality: Annotated[
@@ -1378,7 +1389,7 @@ def create_mcp_server(
             include_geojson=include_geojson,
         )
 
-    @mcp.tool()
+    @mcp.tool(structured_output=structured_output)
     @anticipated_tool
     async def find_parcel_neighbours(
         parcel_number: Annotated[
@@ -1463,7 +1474,7 @@ def create_mcp_server(
             include_geojson=include_geojson,
         )
 
-    @mcp.tool()
+    @mcp.tool(structured_output=structured_output)
     @anticipated_tool
     async def download_municipality_gis(
         municipality: Annotated[
