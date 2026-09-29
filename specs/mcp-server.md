@@ -2,22 +2,22 @@
 
 Model Context Protocol (MCP) server for querying Croatian cadastral and land registry data.
 
-## ⚠️ Important Notice
+## Important Notice
 
 **This MCP server is an educational demonstration.**
 
-- ✅ **Default Configuration**: Connects to `http://localhost:8000` (mock test server)
-- ⚠️ **Other servers**: Before configuring any other server, including the Croatian government APIs, verify that you have the rights to use it and its data (terms of service, data protection). You do so at your own risk; see `docs/legal.md`
+- **Default Configuration**: Connects to `http://localhost:8000` (mock test server)
+- **Other servers**: Before configuring any other server, including the Croatian government APIs, verify that you have the rights to use it and its data (terms of service, data protection). You do so at your own risk; see `docs/legal.md`
 
-## 📖 For Claude Desktop Users
+## For Claude Desktop Users
 
 **If you're using this with Claude Desktop, read the [MCP usage guide](../docs/mcp-usage-guide.md) first!**
 
 It includes:
-- ✅ Which tools work and how to use them
-- ⚠️ Known issues and workarounds
-- 💡 Usage tips and common patterns
-- 🔧 Troubleshooting guide
+- Which tools work and how to use them
+- Known issues and workarounds
+- Usage tips and common patterns
+- Troubleshooting guide
 
 ## What is MCP?
 
@@ -27,9 +27,9 @@ It includes:
 
 MCP servers expose three types of primitives:
 
-- **Resources** 📄 - Read-only contextual data (like REST GET endpoints)
-- **Tools** 🔧 - Executable functions that perform actions
-- **Prompts** 💬 - Reusable templates for common workflows
+- **Resources** - Read-only contextual data (like REST GET endpoints)
+- **Tools** - Executable functions that perform actions
+- **Prompts** - Reusable templates for common workflows
 
 ## Features
 
@@ -49,7 +49,7 @@ The AI decides when to invoke these based on user queries:
 
 **Parcel Operations:**
 - **`find_parcel`** - Find one parcel by number and municipality (parcel id, exact-match check, map link); `max_matches` returns the complete search response
-- **`get_parcel`** - Detailed cadastre record of one or more parcels. Takes a list of references (`parcel_id`, or `parcel_number` + `municipality`) and returns one entry per reference; `source` selects the register (cadastre possessors, land-registry hint, or none); `offset`/`limit` page through the possessor records of each parcel (counted across its possession sheets), `possessor_name`/`condominium_unit` filter them, with a `page` block per entry and a refusal naming a smaller limit when an entry is too large. Each entry carries the land registry unit reference, `provenance` (register, `source_url`, `retrieved_at`) and `area_check` (cadastre, land-register and graphical areas compared); a failed entry carries `error_type` and `error_details`.
+- **`get_parcel`** - Detailed cadastre record of one or more parcels. Takes a list of references (`parcel_id`, or `parcel_number` + `municipality`) and returns one entry per reference; `source` selects the register (cadastre possessors, land-registry hint, or none); `offset`/`limit` page through the possessor records of each parcel (counted across its possession sheets), `possessor_name`/`condominium_unit` filter them, with a `page` block per entry (with `fetched_at`, when the upstream sent the record) and a refusal naming a smaller limit when an entry is too large; `refresh` reads the record again instead of the copy the server keeps for 30 minutes. Each entry carries the land registry unit reference, `provenance` (register, `source_url`, `retrieved_at`) and `area_check` (cadastre, land-register and graphical areas compared); a failed entry carries `error_type` and `error_details`.
 - **`get_parcel_geometry`** - Download and return parcel boundaries
 - **`get_parcel_zoning`** - Screening of a parcel against the spatial plans' building areas
 - **`find_parcels_in_area`** - The parcels of a municipality inside a bounding box, a polygon or a radius around a point (EPSG:3765), from the cached cadastral map: numbers, graphical areas, centroids, map links, `total_area_m2`, paged, optional GeoJSON
@@ -57,7 +57,7 @@ The AI decides when to invoke these based on user queries:
 - **`download_municipality_gis`** - Download (or refresh) a whole municipality's GIS data into the cache and report what was cached, including `downloaded_at`
 
 **Land Registry Operations:**
-- **`get_lr_unit`** - One or more land registry units. Takes a list of references, each by `lr_unit_number` + `main_book_id`, by `lr_unit_number` + `main_book_name`, or by `parcel_number` + `municipality` (resolved through parcel links when needed). Returns one entry per reference; units shared by several references are fetched once. `detail` (`summary`, `ownership`, `shares`, `parcels`, `encumbrances`, `full`), `offset`/`limit` paging over the list the level is about (owner rows, shares, parcels or entry groups), `owner_name` filtering the owners (or the shares holding one) by name, `include_plombe_detail` and `historical_overview` shape every entry. Every level carries `provenance` and `sale_blockers` (what is registered against the unit that bears on a sale, with a screening verdict; the blockers themselves in `ownership` and `encumbrances`, narrowed by `owner_name` or `condominium_unit`); the owner levels carry `distinct_owners` and `owner_flags_summary`, and every `ownership` row its inferred `flags` (likely_deceased, address_abroad, public_body).
+- **`get_lr_unit`** - One or more land registry units. Takes a list of references, each by `lr_unit_number` + `main_book_id`, by `lr_unit_number` + `main_book_name`, or by `parcel_number` + `municipality` (resolved through parcel links when needed). Returns one entry per reference; units shared by several references are fetched once. `detail` (`summary`, `ownership`, `shares`, `parcels`, `encumbrances`, `full`), `offset`/`limit` paging over the list the level is about (owner rows, shares, parcels or entry groups), `owner_name` filtering the owners (or the shares holding one) by name, `include_plombe_detail` and `historical_overview` shape every entry; `refresh` reads the unit again instead of the copy the server keeps for 30 minutes, and the `page` block carries `fetched_at`. Every level carries `provenance` and `sale_blockers` (what is registered against the unit that bears on a sale, with a screening verdict; the blockers themselves in `ownership` and `encumbrances`, narrowed by `owner_name` or `condominium_unit`); the owner levels carry `distinct_owners` and `owner_flags_summary`, and every `ownership` row its inferred `flags` (likely_deceased, address_abroad, public_body).
 - **`get_file_status`** - Processing status of one land-registry file (spis, plomba) by number and institution id
 - **`build_assembly`** - Land-assembly analysis of up to 50 parcels: persons x parcels matrix, persons ranked by controlled area and grouped by surname (with the counts of persons flagged likely deceased or abroad), parcels ranked by a transparent ease-of-acquisition score (weights returned and adjustable; zoning optional) with their sale verdict and blocker kinds, totals by land use, relationship, zoning status and verdict, CSV or GeoJSON export as text
 - **`compare_registers`** - Cadastre possessors against registered owners for a set of parcels: `same` / `overlapping` / `disjoint` per parcel, matched pairs (fuzzy flagged), who is in one register only, inferred party types (labelled), public-body share, area check, the sale blockers of the unit plus owner-not-possessor and fuzzy-match findings, owner flag counts, distinct people across the set
@@ -121,9 +121,8 @@ pip install -e .
 ```
 
 This installs:
-- `mcp>=2,<3` - MCP Python SDK v2 (`MCPServer`, formerly `FastMCP`)
-- `fastapi>=0.115.0` - For HTTP transport
-- `uvicorn[standard]>=0.32.0` - ASGI server
+- `mcp>=2,<3` - MCP Python SDK v2 (`MCPServer`, formerly `FastMCP`); brings
+  `starlette` and `uvicorn` for the HTTP transport
 - All existing cadastral API dependencies
 
 ### 2. Configure Environment
@@ -142,7 +141,7 @@ MCP_HTTP_HOST=127.0.0.1
 MCP_HTTP_PORT=8080
 ```
 
-**⚠️ Configure another API URL only after verifying your rights to use that server (see `docs/legal.md`); use at your own risk.**
+**Configure another API URL only after verifying your rights to use that server (see `docs/legal.md`); use at your own risk.**
 
 ## Usage
 
@@ -157,7 +156,7 @@ For local integration with Claude Desktop or other MCP clients:
 cadastral-mcp --transport stdio
 
 # Or with Python module
-python -m mcp.main --transport stdio
+python -m cadastral_mcp.main --transport stdio
 ```
 
 #### Claude Desktop Configuration
@@ -188,7 +187,7 @@ Or with full Python path:
   "mcpServers": {
     "cadastral": {
       "command": "/path/to/your/venv/bin/python",
-      "args": ["-m", "mcp.main", "--transport", "stdio"],
+      "args": ["-m", "cadastral_mcp.main", "--transport", "stdio"],
       "env": {
         "CADASTRAL_API_BASE_URL": "http://localhost:8000"
       }
@@ -199,16 +198,19 @@ Or with full Python path:
 
 Restart Claude Desktop to load the server.
 
-### HTTP Mode (Web/Remote Access)
+### HTTP Mode (clients that connect to a URL)
 
-For web applications or remote access via FastAPI:
+The MCP SDK's streamable HTTP transport (`MCPServer.streamable_http_app`),
+mounted at `/mcp`, stateless (no session affinity, clean restarts, works
+behind any reverse proxy) with JSON responses (no event stream to hold open).
+The SSE transport is not offered; it is deprecated in the protocol.
 
 ```bash
 # Run on default host and port (127.0.0.1:8080)
 cadastral-mcp --transport http
 
-# Custom host and port
-cadastral-mcp --transport http --host 0.0.0.0 --port 8080
+# Custom port
+cadastral-mcp --transport http --port 8090
 
 # With debug logging
 cadastral-mcp --transport http --log-level DEBUG
@@ -216,27 +218,69 @@ cadastral-mcp --transport http --log-level DEBUG
 
 #### HTTP Endpoints
 
-Once running, the server provides:
-
-- **Health Check**: `GET http://localhost:8080/health`
-- **Capabilities**: `GET http://localhost:8080/mcp/capabilities`
-- **MCP SSE**: `POST http://localhost:8080/mcp/sse` (for MCP clients)
-
-Test the health endpoint:
+- **MCP**: `POST http://127.0.0.1:8080/mcp` (the URL an MCP client is given)
+- **Health check**: `GET http://127.0.0.1:8080/health`
 
 ```bash
-curl http://localhost:8080/health
+curl http://127.0.0.1:8080/health
 ```
 
-Response:
 ```json
 {
-  "status": "healthy",
+  "status": "ok",
   "server": "cadastral-mcp-server",
-  "version": "0.1.0",
-  "api_base_url": "http://localhost:8000"
+  "version": "0.3.0",
+  "api_base_url": "http://localhost:8000",
+  "mcp_path": "/mcp"
 }
 ```
+
+#### Access keys (`cadastral_mcp.auth`)
+
+`MCP_HTTP_KEYS` in the `.env` file lists the access keys (random UUIDs),
+comma-separated. `KeyStore` reads the file on every check (the process
+environment's copy is ignored, so a removal from the file revokes at once);
+`MCP_HTTP_KEYS_FILE` names another file. Comparison is constant-time; logs
+and the token store carry only a truncated SHA-256 of a key (`key_id`).
+
+A key is accepted two ways, both through the SDK's bearer middleware:
+
+- as the bearer token itself (`Authorization: Bearer <key>`), for clients that
+  send headers;
+- through OAuth 2.1: `KeyAuthProvider` implements the SDK's
+  `OAuthAuthorizationServerProvider`, so the SDK serves the metadata,
+  dynamic client registration, `/authorize`, `/token` and `/revoke`, and
+  enforces PKCE and the registered redirect URIs. `authorize` parks the
+  request under a random transaction id and redirects to `/login`, a custom
+  route with a one-field form; a valid key mints the authorization code
+  (5 min), the exchange issues an access token (1 h) and a refresh token
+  (30 days, rotated on use). Every token records the key's `key_id` as its
+  subject and is refused, on use and on refresh, once that key has left the
+  file. `AuthStore` keeps clients and tokens in one JSON file
+  (`MCP_HTTP_AUTH_STORE`, mode 0600, atomic writes) so a restart keeps
+  sessions.
+
+The issuer and the login page are built on `MCP_HTTP_PUBLIC_URL` (default
+`http://HOST:PORT`): the HTTPS proxy's address when there is one, which
+claude.ai and ChatGPT require. `validate_token_resource` is off: the server
+issues tokens only for itself and the verifier checks the key behind each
+token instead.
+
+The listen rule (`http_server.auth_for`): without keys the server is open
+and may only listen on the loopback interface (the SDK's DNS-rebinding
+protection is on there); with keys it may listen anywhere. Whether keys are
+present is decided at start. `/health` and `/login` are public routes.
+
+#### Concurrency
+
+Over HTTP several clients call tools at once. The handlers run the
+synchronous SDK client in worker threads (`asyncio.to_thread`), so a 20 s
+land-registry read does not stall the others. Everything the threads share
+is guarded: the response cache and its in-flight dedup (one upstream fetch
+for two identical calls), the per-file GML parsers and parcel indexes, the
+municipality download. The rate limiter (`cadastral_api.rate_limiter`) hands
+concurrent callers consecutive slots one interval apart, so the upstream
+never sees a burst; it is per process, so run a single worker.
 
 ## Example Interactions
 
@@ -361,14 +405,14 @@ Claude compares multiple parcels across:
 ### Project Structure
 
 ```text
-src/mcp/
+src/cadastral_mcp/
 ├── __init__.py          # Package exports
 ├── config.py            # Configuration from environment
 ├── server.py            # Main MCPServer with all primitives
 ├── resources.py         # Resource implementations
 ├── tools.py             # Tool implementations
 ├── prompts.py           # Prompt templates
-├── http_server.py       # FastAPI HTTP transport
+├── http_server.py       # Streamable HTTP transport (the SDK's) and /health
 └── main.py              # CLI entry point
 ```
 
@@ -415,8 +459,8 @@ cadastral-mcp --transport stdio --log-level DEBUG
 
 ### Adding New Tools
 
-1. Add method to `CadastralTools` class in [tools.py](../src/mcp/tools.py)
-2. Register in `create_mcp_server()` in [server.py](../src/mcp/server.py):
+1. Add method to `CadastralTools` class in [tools.py](../mcp/src/cadastral_mcp/tools.py)
+2. Register in `create_mcp_server()` in [server.py](../mcp/src/cadastral_mcp/server.py):
 
 ```python
 @mcp.tool()
@@ -446,7 +490,7 @@ async def my_new_tool(
 
 ### Adding New Prompts
 
-1. Add method to `CadastralPrompts` class in [prompts.py](../src/mcp/prompts.py)
+1. Add method to `CadastralPrompts` class in [prompts.py](../mcp/src/cadastral_mcp/prompts.py)
 2. Register in `create_mcp_server()`:
 
 ```python
@@ -467,6 +511,8 @@ async def my_new_prompt(param: str) -> str:
 | `CADASTRAL_API_RATE_LIMIT` | `0.75` | Rate limit between requests (seconds) |
 | `CADASTRAL_LANG` | `hr` | Language: hr, en, de, it |
 | `CADASTRAL_CACHE_DIR` | `~/.cadastral_api_cache` | GIS data cache directory |
+| `CADASTRAL_CACHE` | `memory` | Response cache backend: `memory` (in-process) or `off`; see [response-cache-specification.md](response-cache-specification.md) |
+| `CADASTRAL_CACHE_MEMORY_MB` | `64` | Byte budget of the memory response cache |
 | `MCP_HTTP_HOST` | `127.0.0.1` | HTTP server host |
 | `MCP_HTTP_PORT` | `8080` | HTTP server port |
 
@@ -527,15 +573,6 @@ cadastral-mcp --transport http --log-level DEBUG
 
 The server respects the configured rate limit (0.75s default) to prevent API abuse.
 
-### CORS Configuration
-
-In HTTP mode, CORS is configured for:
-- `http://localhost:3000`
-- `http://127.0.0.1:3000`
-- `https://claude.ai`
-
-Modify `config.http_cors_origins` for custom origins.
-
 ### Data Privacy
 
 **Critical**: This server accesses land ownership data (personal information):
@@ -549,7 +586,7 @@ Modify `config.http_cors_origins` for custom origins.
 - **MCP Python SDK**: <https://github.com/modelcontextprotocol/python-sdk>
 - **Claude Desktop**: <https://claude.ai/download>
 - **Project Documentation**: [../README.md](../README.md)
-- **API Documentation**: [../specs/Croatian_Cadastral_API_Specification.md](../specs/Croatian_Cadastral_API_Specification.md)
+- **API Documentation**: [croatian-cadastral-api-specification.md](croatian-cadastral-api-specification.md)
 
 ## License
 

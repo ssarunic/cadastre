@@ -1,6 +1,7 @@
 """GIS data cache manager for municipality ZIP files."""
 
 import shutil
+import threading
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -62,6 +63,11 @@ class GISCache:
         self.cache_dir = Path(cache_dir)
         self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        # Writes to the cache directory happen one at a time: two threads
+        # fetching the same municipality would otherwise purge or truncate
+        # each other's files mid-write. Reentrant, since get_parcel_data
+        # holds it across the download and the extraction.
+        self._lock = threading.RLock()
 
     def get_municipality_dir(self, municipality_reg_num: str) -> Path:
         """
@@ -190,24 +196,27 @@ class GISCache:
         """
         zip_path = self.get_zip_path(municipality_reg_num)
 
-        if self.is_cached(municipality_reg_num) and not force:
-            return zip_path
+        with self._lock:
+            # Checked under the lock: a thread that waited for another's
+            # download of the same municipality finds it cached.
+            if self.is_cached(municipality_reg_num) and not force:
+                return zip_path
 
-        # Download from the ATOM feed of the configured API (mock server by default)
-        url = f"{self.base_url}/atom/ko-{municipality_reg_num}.zip"
+            # Download from the ATOM feed of the configured API (mock server by default)
+            url = f"{self.base_url}/atom/ko-{municipality_reg_num}.zip"
 
-        with httpx.Client(timeout=60.0, follow_redirects=True) as client:
-            response = client.get(url)
-            response.raise_for_status()
-            content = response.content
+            with httpx.Client(timeout=60.0, follow_redirects=True) as client:
+                response = client.get(url)
+                response.raise_for_status()
+                content = response.content
 
-        # Only after a successful download: drop whatever was cached before so
-        # that no stale ZIP or extracted GML from another server is served.
-        self._purge_municipality_dir(municipality_reg_num)
-        zip_path.write_bytes(content)
-        self.get_source_path(municipality_reg_num).write_text(
-            self.base_url + "\n", encoding="utf-8"
-        )
+            # Only after a successful download: drop whatever was cached before so
+            # that no stale ZIP or extracted GML from another server is served.
+            self._purge_municipality_dir(municipality_reg_num)
+            zip_path.write_bytes(content)
+            self.get_source_path(municipality_reg_num).write_text(
+                self.base_url + "\n", encoding="utf-8"
+            )
 
         return zip_path
 
@@ -236,10 +245,12 @@ class GISCache:
 
         gml_path = self.get_gml_path(municipality_reg_num, filename)
 
-        # Extract if not already extracted
-        if not gml_path.exists():
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                zf.extract(filename, self.get_municipality_dir(municipality_reg_num))
+        # Extract if not already extracted (checked under the lock: a thread
+        # that waited for another's extraction finds the file).
+        with self._lock:
+            if not gml_path.exists():
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    zf.extract(filename, self.get_municipality_dir(municipality_reg_num))
 
         return gml_path
 
@@ -257,10 +268,10 @@ class GISCache:
         Raises:
             FileNotFoundError: Not cached and auto_download=False
         """
-        if auto_download and not self.is_cached(municipality_reg_num):
-            self.download_municipality(municipality_reg_num)
-
-        return self.extract_gml(municipality_reg_num, "katastarske_cestice.gml")
+        with self._lock:
+            if auto_download and not self.is_cached(municipality_reg_num):
+                self.download_municipality(municipality_reg_num)
+            return self.extract_gml(municipality_reg_num, "katastarske_cestice.gml")
 
     def cached_municipalities(self) -> list[CachedMunicipality]:
         """Every municipality with a cache directory, with its size on disk.

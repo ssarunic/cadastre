@@ -13,6 +13,7 @@ from .analysis import (
     person_key,
     same_person,
 )
+from .cache import CacheStats, MemoryCache, NullCache, ResponseCache, TieredCache
 from .client import CadastralAPIClient
 from .exceptions import CadastralAPIError, ErrorType
 from .gis import GISCache, GMLParser, ParcelIndex
@@ -54,6 +55,12 @@ __version__ = "0.3.0"
 __all__ = [
     # Client
     "CadastralAPIClient",
+    # Response cache
+    "CacheStats",
+    "MemoryCache",
+    "NullCache",
+    "ResponseCache",
+    "TieredCache",
     # Exceptions
     "CadastralAPIError",
     "ErrorType",

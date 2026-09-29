@@ -46,7 +46,12 @@ such parcel, here is what exists", not as a hit. A building parcel is never
 answered with a land parcel or the other way round. Building parcels may be
 written "35/1 ZGR", "35/1.ZGR", "zgr. 35/1" or "*35/1"; all resolve exactly.
 
-### `get_parcel(parcels, source="cadastre", offset=0, limit=None, possessor_name=None, condominium_unit=None)`
+### `get_parcel(parcels, source="cadastre", offset=0, limit=None, possessor_name=None, condominium_unit=None, refresh=False)`
+
+A record read once is kept by the server for 30 minutes and every later page
+or filter of it is cut from that copy, without another upstream request;
+`page.fetched_at` says when the upstream sent it, and `refresh=true` reads it
+again (see Caching under Reminders).
 
 The detailed cadastre record of one or more parcels: area, land use, possession
 sheet, land registry reference, `cadastre_lr_harmonized`, `map_url`. `parcels`
@@ -132,7 +137,13 @@ set per unit and not recomputed to a whole (unit 8974 of GRAD ZAGREB sums to
 13029/10000 on both sides), so report the excess and check it against the
 unit's shares rather than treating it as an error of the sum.
 
-### `get_lr_unit(units, detail="ownership", limit=None, offset=0, owner_name=None, condominium_unit=None, include_plombe_detail=False, historical_overview=False)`
+### `get_lr_unit(units, detail="ownership", limit=None, offset=0, owner_name=None, condominium_unit=None, include_plombe_detail=False, historical_overview=False, refresh=False)`
+
+A unit read once is kept by the server for 30 minutes: paging with `offset`
+and `limit`, changing `detail` or filtering by `owner_name` all reuse that
+copy, so a five-page walk through a large condominium is one slow upstream
+fetch, not five. `page.fetched_at` (and `provenance.retrieved_at`) say when
+the upstream sent the record; `refresh=true` reads it again.
 
 One or more land registry units: registered owners with shares (list B),
 parcels (list A), encumbrances (list C), pending entries (plombe). `units` is a
@@ -656,6 +667,91 @@ carry the same rules per tool, so nothing is lost with a client that does not.
   (see `.env.example`; verify your rights first) and restart the MCP server.
 - **Rate limiting**: the server spaces its requests; pass lists to `get_parcel`
   and `get_lr_unit` instead of calling once per item.
+
+## Running over HTTP
+
+`cadastral-mcp --transport http` serves the same tools, resources and prompts
+over streamable HTTP for clients that connect to a URL instead of starting
+the process themselves. The endpoint is `http://127.0.0.1:8080/mcp`
+(`MCP_HTTP_HOST`, `MCP_HTTP_PORT` or `--host`, `--port` change it); `GET
+/health` answers with the server version and the API URL it uses.
+
+```bash
+cadastral-mcp --transport http
+claude mcp add --transport http cadastral http://127.0.0.1:8080/mcp
+```
+
+### Access keys
+
+Access is controlled by `MCP_HTTP_KEYS` in the `.env` file: a comma-separated
+list of random keys (UUIDs). The file is read on every check, so removing a
+key revokes it at once, no restart; adding one to a server that started
+without any needs a restart. Without keys the server is open and only
+listens on the loopback interface; with keys it may listen anywhere, behind
+an HTTPS proxy.
+
+```bash
+python -c "import uuid; print(uuid.uuid4())"      # a new key
+MCP_HTTP_KEYS=3f2b...,9c41...                     # in .env
+MCP_HTTP_PUBLIC_URL=https://mcp.example.com       # the URL clients use, when proxied
+```
+
+A key opens the server in two ways, and the client decides which:
+
+| Client | How the key gets there |
+|---|---|
+| Claude Code | `claude mcp add --transport http -H "Authorization: Bearer <key>" cadastral <url>/mcp` |
+| MCP Inspector, Codex CLI, scripts | the same `Authorization: Bearer <key>` header |
+| claude.ai custom connectors (web, Desktop, mobile), ChatGPT | OAuth: the client registers itself, opens the server's login page, the person types a key, and the client keeps short-lived tokens |
+
+The OAuth tokens are issued by the server itself (issuer `MCP_HTTP_PUBLIC_URL`)
+and stay valid only while the key they were opened with is in the file. They
+are kept in `MCP_HTTP_AUTH_STORE` (default `<cache dir>/mcp_http_auth.json`,
+owner-readable, no raw keys in it) so a restart keeps sessions. claude.ai and
+ChatGPT need a public HTTPS URL for this; keys sent in the clear over plain
+HTTP off the loopback interface are keys for anyone on the path. `GET /health`
+and the login page stay public. Which clients support headers or OAuth is as
+of this writing; check the client's own documentation.
+
+### Claude Desktop, claude.ai and the mobile app
+
+For a server on the same machine Claude Desktop keeps the stdio
+configuration in `claude_desktop_config.json` (see the README); nothing
+changes. To reach the HTTP server from claude.ai, the mobile app or Claude
+Desktop on another machine, it is added once as a custom connector, which
+needs a public HTTPS URL and the OAuth login:
+
+1. Put the keys in `.env` and the public address in `MCP_HTTP_PUBLIC_URL`,
+   start `cadastral-mcp --transport http` (loopback is fine).
+2. Put an HTTPS reverse proxy in front, forwarding to `127.0.0.1:8080` with
+   the original `Host` header (Caddy: `mcp.example.com { reverse_proxy
+   127.0.0.1:8080 }`); a tunnel such as `cloudflared` does the same. The
+   server accepts the public hostname next to the local ones.
+3. On claude.ai: Settings, Connectors, Add custom connector, URL
+   `https://mcp.example.com/mcp`, then Connect. The browser opens the
+   server's login page; type a key. The connector is then available in the
+   web app, Claude Desktop and the mobile app signed in to the same account.
+
+Custom connectors are a claude.ai feature whose availability depends on the
+plan; check the current Anthropic documentation.
+
+### Concurrency
+
+Several clients may call tools at once; the server runs them in parallel and
+still sends the upstream one request per `CADASTRAL_API_RATE_LIMIT`
+interval, so run one process, not several workers. Claude Desktop keeps
+using the stdio transport for a local server.
+
+## Caching
+
+The server keeps upstream responses in memory: records that name people
+(parcels, possession sheets, land-registry units) for 30 minutes, reference
+lists for 24 hours, searches for 6 hours. Pages, detail levels and filters of a
+record already read cost no upstream request. `get_parcel` and `get_lr_unit`
+take `refresh=true` to read a record again; their `page.fetched_at` says how
+old the copy is. `CADASTRAL_CACHE=off` in the client's `env` block turns the
+cache off, `CADASTRAL_CACHE_MEMORY_MB` sizes it (default 64). Nothing is
+written to disk.
 
 ## Reminders
 

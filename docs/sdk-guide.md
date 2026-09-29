@@ -23,6 +23,8 @@ The client reads a `.env` file and these environment variables:
 | `CADASTRAL_API_TIMEOUT` | `10.0` | Request timeout in seconds (connecting, and the response of every search); a land-registry unit or parcel record is waited for up to 120 s, see `long_timeout` below |
 | `CADASTRAL_API_RATE_LIMIT` | `0.375` | Minimum seconds between upstream requests |
 | `CADASTRAL_CACHE_DIR` | `~/.cadastral_api_cache` | Where downloaded GML files are kept |
+| `CADASTRAL_CACHE` | `memory` | Response cache backend: `memory` (in this process) or `off`; see Caching below |
+| `CADASTRAL_CACHE_MEMORY_MB` | `64` | Byte budget of the memory response cache |
 
 All of them can be overridden per client:
 
@@ -46,6 +48,48 @@ uncached, and takes 20 s or more before the first byte. Connecting keeps
 error names the timeout that applied in `details["timeout_seconds"]`.
 
 Use the client as a context manager so the HTTP connection is closed.
+
+### Caching
+
+Every response the upstream sends is kept in the client for the lifetime of
+its data class and served from there on the next identical request, without
+touching the rate limiter: reference lists (offices, municipalities, main
+books) for 24 hours, number-to-id searches for 6 hours, parcel records,
+possession sheets and land-registry units for 30 minutes, file statuses for
+5 minutes. The 30 minutes on the classes that name people is a policy, not
+a setting: configuration can turn the cache off but never lengthen it. The
+default backend is the memory of the process (`CADASTRAL_CACHE=memory`,
+64 MB by default), so a CLI run starts empty and the MCP server keeps a
+record between the pages an agent asks for; `CADASTRAL_CACHE=off` disables
+it. Errors and empty answers are never stored. The disk and Redis layers of
+[specs/response-cache-specification.md](../specs/response-cache-specification.md)
+are not in this version yet.
+
+```python
+from cadastral_api import CadastralAPIClient, MemoryCache
+
+with CadastralAPIClient(cache="memory") as client:     # or "off", or a backend
+    unit = client.get_lr_unit_detailed("769", 21277)     # fetched
+    unit = client.get_lr_unit_detailed("769", 21277)     # served from the cache
+    print(unit.provenance.retrieved_at)                  # when the upstream sent it
+    unit = client.get_lr_unit_detailed("769", 21277, refresh=True)   # fetched again
+    print(client.cache.stats())    # CacheStats(backend='memory', entries=1, bytes=..., hits=1, misses=1)
+    client.cache.clear()
+
+with CadastralAPIClient(cache=MemoryCache(max_bytes=8 * 1024 * 1024)) as client:
+    ...
+```
+
+`refresh=True` on `get_parcel_info`, `get_possession_sheet`,
+`get_possession_sheet_by_number`, `get_lr_unit_detailed`,
+`get_lr_unit_from_parcel` and `get_possession_sheet_parcels` reads the record
+from the server again and replaces the cached copy; on the composed methods it
+refreshes the records that name people (the parcel record, the unit, the
+sheet), while the municipality, parcel-number and main-book lookups may still
+come from the cache. `provenance.retrieved_at` on a record is the time of the
+upstream fetch, the original one when the record came from the cache. A cached
+body that the current models reject (a model changed since it was stored) is
+dropped and fetched again; a cache hit never raises where a fetch would not.
 
 ## The three-step lookup
 

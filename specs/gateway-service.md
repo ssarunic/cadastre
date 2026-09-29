@@ -67,9 +67,9 @@ scale. Instead, the gateway runs SDK calls in a worker thread (FastAPI does this
 `def` endpoints; use `anyio.to_thread.run_sync` elsewhere). An async client can be added
 later without changing the REST or MCP surface.
 
-Consequence: the upstream rate limiter must be thread-safe. The current
-`_wait_for_rate_limit` reads and writes `_last_request_time` without a lock and is not.
-See section 6.
+Consequence: the upstream rate limiter must be thread-safe. It is, since the MCP
+server's HTTP transport: `cadastral_api.rate_limiter.RateLimiter` hands concurrent
+callers consecutive slots one interval apart. See section 6 for what the gateway adds.
 
 ### 2.4 Resource-oriented REST, not passthrough
 
@@ -175,8 +175,12 @@ GET  /healthz
 ### 5.1 Transport
 
 Mount the MCP Python SDK's streamable HTTP application at `/mcp`, stateless, JSON
-responses. Stateless means no session affinity and clean restarts. The placeholder SSE
-implementation in `mcp/src/cadastral_mcp/http_server.py` is removed.
+responses. Stateless means no session affinity and clean restarts.
+
+Status: `mcp/src/cadastral_mcp/http_server.py` already does exactly this for
+`cadastral-mcp --transport http` (loopback, no authentication; see
+`mcp-server.md`, "HTTP Mode"). The gateway reuses that mount and adds the
+authentication and the service layer below.
 
 ### 5.2 Tools
 
@@ -200,8 +204,9 @@ Desktop continues to use the local stdio server.
 One process-wide limiter guards every upstream call regardless of which adapter triggered
 it.
 
-- Implementation: a `threading.Lock` around the existing timestamp check in the SDK, so
-  concurrent worker threads serialize correctly. Interval from `CADASTRAL_API_RATE_LIMIT`.
+- Implementation: the SDK's `RateLimiter` (slot reservation under a lock, one per
+  client, shared by every worker thread), already in place. Interval from
+  `CADASTRAL_API_RATE_LIMIT`. The gateway adds the fairness and backpressure below.
 - Fairness: interactive requests (REST GET, MCP tool) take priority over batch jobs. The
   batch worker yields whenever an interactive request is waiting. A simple two-level
   queue is enough.
@@ -222,9 +227,12 @@ it.
 ### 7.2 MCP: OAuth 2.1
 
 This is the one genuinely non-trivial piece, and it is imposed by claude.ai, not by the
-design. The gateway acts as an OAuth resource server and validates JWTs. The authorization
-server is external. Candidates, to be decided in phase 3 after checking current MCP SDK
-support:
+design. Status: the MCP server already is a small OAuth 2.1 authorization server whose
+login credential is an access key from `.env` (`cadastral_mcp.auth`, see
+`mcp-server.md`, "Access keys"); claude.ai connectors work against it behind an HTTPS
+proxy. The gateway keeps that for a handful of trusted users, or replaces it with an
+external authorization server when real accounts are needed: it then acts as an OAuth
+resource server and validates JWTs. Candidates, to be decided in phase 3:
 
 1. A hosted identity provider with a free tier and dynamic client registration.
 2. Keycloak in the same Docker Compose file, if a hosted provider proves awkward.
@@ -318,10 +326,13 @@ gateway/
 
 Changes to existing projects:
 
-- `api/`: make `_wait_for_rate_limit` thread-safe. No other change required for v1.
+- `api/`: `_wait_for_rate_limit` is thread-safe since the HTTP transport
+  (`cadastral_api.rate_limiter.RateLimiter`); the interactive-priority queue of
+  section 6 is still to do. No other change required for v1.
 - `mcp/`: tool bodies move to `cadastral_gateway.mcp_adapter` or to a shared module the
-  stdio server imports; `http_server.py` is deleted; `main.py --transport http` prints a
-  pointer to the gateway.
+  stdio server imports; `http_server.py` stays as the unauthenticated local transport,
+  or `main.py --transport http` prints a pointer to the gateway, to be decided when
+  the gateway exists.
 - `cli/`: optional `--backend gateway --gateway-url ... --api-key ...` so the CLI can use
   the shared cache instead of calling upstream. Phase 2, not required.
 - `mock-server/`: unchanged; it is the upstream for contract tests.

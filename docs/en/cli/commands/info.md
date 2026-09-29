@@ -45,6 +45,7 @@ Nothing. This command takes no input and changes nothing.
    Cache Size: 0.0 MB
    Cached Municipalities: 1
      • 334979 (0.7 KB)
+   Response cache: memory, 0 entries, 0.0 MB
 
    API Settings
    ============
@@ -59,8 +60,10 @@ Nothing. This command takes no input and changes nothing.
 4. **API Base** is the address of the server the tool talks to. For practice
    it is the address of the practice server on your own computer.
    **Cache Information** lists the municipalities whose boundary data is
-   stored on your computer. **API Settings** shows how long the tool waits
-   between requests and how long it waits for an answer.
+   stored on your computer, and the **Response cache** line says whether
+   answers from the server are kept in memory while a command runs (they
+   are, unless it says `off`). **API Settings** shows how long the tool
+   waits between requests and how long it waits for an answer.
 
 ## Choices you can make
 

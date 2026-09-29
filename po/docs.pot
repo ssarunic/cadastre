@@ -109,7 +109,7 @@ msgstr ""
 #: commands/cache-list.md:51 commands/download-gis.md:56
 #: commands/get-geometry.md:74 commands/get-lr-unit.md:100
 #: commands/get-parcel.md:102 commands/get-possession-sheet.md:79
-#: commands/get-zoning.md:90 commands/info.md:65
+#: commands/get-zoning.md:90 commands/info.md:68
 #: commands/list-books-of-dc.md:53 commands/list-main-books.md:53
 #: commands/list-municipalities.md:66 commands/list-offices.md:89
 #: commands/search-municipality.md:52 commands/search-possession-sheet.md:55
@@ -132,7 +132,7 @@ msgstr ""
 #: commands/cache-list.md:59 commands/download-gis.md:71
 #: commands/get-geometry.md:98 commands/get-lr-unit.md:366
 #: commands/get-parcel.md:213 commands/get-possession-sheet.md:113
-#: commands/get-zoning.md:122 commands/info.md:73
+#: commands/get-zoning.md:122 commands/info.md:76
 #: commands/list-books-of-dc.md:74 commands/list-main-books.md:78
 #: commands/list-municipalities.md:90 commands/list-offices.md:104
 #: commands/search-municipality.md:75 commands/search-possession-sheet.md:72
@@ -154,7 +154,7 @@ msgstr ""
 #: commands/cache-list.md:64 commands/download-gis.md:90
 #: commands/get-geometry.md:117 commands/get-lr-unit.md:382
 #: commands/get-parcel.md:265 commands/get-possession-sheet.md:128
-#: commands/get-zoning.md:141 commands/info.md:80
+#: commands/get-zoning.md:141 commands/info.md:83
 #: commands/list-books-of-dc.md:87 commands/list-main-books.md:92
 #: commands/list-municipalities.md:103 commands/list-offices.md:110
 #: commands/search-municipality.md:89 commands/search-possession-sheet.md:85
@@ -174,7 +174,7 @@ msgstr ""
 #: commands/cache-list.md:71 commands/download-gis.md:96
 #: commands/get-geometry.md:123 commands/get-lr-unit.md:390
 #: commands/get-parcel.md:272 commands/get-possession-sheet.md:135
-#: commands/get-zoning.md:147 commands/info.md:86
+#: commands/get-zoning.md:147 commands/info.md:89
 #: commands/list-books-of-dc.md:93 commands/list-main-books.md:99
 #: commands/list-municipalities.md:109 commands/list-offices.md:116
 #: commands/search-municipality.md:96 commands/search-possession-sheet.md:92
@@ -1083,20 +1083,22 @@ msgid ""
 " server."
 msgstr ""
 
-#: commands/info.md:59
+#: commands/info.md:60
 msgid ""
 "**API Base** is the address of the server the tool talks to. For practice it "
 "is the address of the practice server on your own computer. **Cache "
 "Information** lists the municipalities whose boundary data is stored on your "
-"computer. **API Settings** shows how long the tool waits between requests and"
-" how long it waits for an answer."
+"computer, and the **Response cache** line says whether answers from the "
+"server are kept in memory while a command runs (they are, unless it says "
+"`off`). **API Settings** shows how long the tool waits between requests and "
+"how long it waits for an answer."
 msgstr ""
 
-#: commands/info.md:67
+#: commands/info.md:70
 msgid "None. If the tool prints this screen, it is installed correctly."
 msgstr ""
 
-#: commands/info.md:75
+#: commands/info.md:78
 msgid ""
 "If Terminal says the command is not found, the tool is not installed for your"
 " user account, or Terminal was opened before the installation finished. Close"
@@ -1104,12 +1106,12 @@ msgid ""
 "installed the tool."
 msgstr ""
 
-#: commands/info.md:82
+#: commands/info.md:85
 msgid ""
 "[cache-list](cache-list.md) shows the stored boundary data in more detail."
 msgstr ""
 
-#: commands/info.md:83
+#: commands/info.md:86
 msgid "[Start here](../start-here.md) is the tutorial."
 msgstr ""
 
@@ -2007,31 +2009,31 @@ msgstr ""
 msgid "You should see this:"
 msgstr ""
 
-#: install.md:115
+#: install.md:116
 msgid "Hand-over checklist"
 msgstr ""
 
-#: install.md:117
+#: install.md:118
 msgid ""
 "The practice server starts on its own, or the user knows the two lines that "
 "start it."
 msgstr ""
 
-#: install.md:118
+#: install.md:119
 msgid ""
 "`cadastral info` prints the screen above in a fresh terminal opened by the "
 "user."
 msgstr ""
 
-#: install.md:119
+#: install.md:120
 msgid "`CADASTRAL_LANG` is set in the user's profile."
 msgstr ""
 
-#: install.md:120
+#: install.md:121
 msgid "The user has the link to [Start here](start-here.md) in their language."
 msgstr ""
 
-#: install.md:121
+#: install.md:122
 msgid ""
 "The user has your contact for when Terminal says the command is not found."
 msgstr ""

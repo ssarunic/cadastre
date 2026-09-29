@@ -48,14 +48,16 @@ class _FakeClient:
     def get_lr_unit_detailed(self, unit_number, main_book_id=None, **kwargs):
         return self.unit
 
-    def get_lr_unit_from_parcel(self, parcel_number, municipality, historical_overview=False):
+    def get_lr_unit_from_parcel(
+        self, parcel_number, municipality, historical_overview=False, **kwargs
+    ):
         return self.unit
 
     def get_plombe_details(self, lr_unit):
         self.status_calls.append(lr_unit.lr_unit_number)
         return {p.file_number: self.status for p in lr_unit.active_plumbs}
 
-    def get_parcel_info(self, parcel_id):
+    def get_parcel_info(self, parcel_id, **kwargs):
         if str(parcel_id) == "0":
             raise CadastralAPIError(ErrorType.PARCEL_NOT_FOUND, details={"parcel_id": "0"})
         return self.parcel
@@ -267,7 +269,7 @@ class _TwoParcelClient(_FakeClient):
         living = self.units["788"].ownership_sheet_b.lr_unit_shares[0].owners[0]
         living.name, living.tax_number = "ŠARUNIĆ AUGUSTIN", "63061048570"
 
-    def get_parcel_info(self, parcel_id):
+    def get_parcel_info(self, parcel_id, **kwargs):
         return self.parcels[int(parcel_id)]
 
     def get_lr_unit_detailed(self, unit_number, main_book_id=None, **kwargs):

@@ -594,7 +594,7 @@ def _print_ownership_info(parcel) -> None:
     for i, sheet in enumerate(parcel.possession_sheets, 1):
         if len(parcel.possession_sheets) > 1:
             console.print(
-                f"\n{_('Possession Sheet')} {i} - {sheet.possession_sheet_number}",
+                f"\n{_('Possession Sheet')} {i} - {sheet.possession_sheet_number or '-'}",
                 style="bold yellow"
             )
 

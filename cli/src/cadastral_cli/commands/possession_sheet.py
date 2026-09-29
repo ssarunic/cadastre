@@ -153,7 +153,7 @@ def _print_sheet(result: Any, show_owners: bool) -> None:
     info = Table(show_header=False, box=None, padding=(0, 2))
     info.add_column(_("Field"), style="bold")
     info.add_column(_("Value"))
-    info.add_row(_("Sheet Number"), sheet.possession_sheet_number)
+    info.add_row(_("Sheet Number"), sheet.possession_sheet_number or "-")
     info.add_row(_("Sheet ID"), str(sheet.possession_sheet_id or "-"))
     info.add_row(
         _("Municipality"),

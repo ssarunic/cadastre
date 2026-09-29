@@ -12,6 +12,26 @@ number and one tag.
 
 ### Added
 
+- SDK: a response cache in the client (`specs/response-cache-specification.md`,
+  phase 1). Every upstream response is kept for the lifetime of its data
+  class (reference lists 24 h, searches 6 h, parcel records, possession
+  sheets and land-registry units 30 min, file statuses 5 min) and served
+  from the cache on the next identical request without touching the rate
+  limiter; two threads asking for one record make one fetch; errors and
+  empty answers are never stored. `CADASTRAL_CACHE=memory|off` (default
+  `memory`, `CADASTRAL_CACHE_MEMORY_MB` sizes it) or
+  `CadastralAPIClient(cache=...)`; `client.cache.stats()` and `clear()`;
+  `refresh=True` on `get_parcel_info`, `get_possession_sheet*`,
+  `get_lr_unit_detailed`, `get_lr_unit_from_parcel` and
+  `get_possession_sheet_parcels` reads the record again. A cached body the
+  current models reject is dropped and fetched again. `provenance.retrieved_at`
+  is the time of the upstream fetch, the original one on a cache hit. New
+  dependency `cachetools`.
+- CLI: `cadastral info` reports the response cache (backend, entries, size).
+- MCP: `get_parcel` and `get_lr_unit` take `refresh`, and their `page` block
+  carries `fetched_at`; paging, detail levels and filters of a record already
+  read make no upstream request. `CADASTRAL_CACHE` is read from the client's
+  `env` block.
 - SDK, MCP: `build_assembly` returns `blockers`, one row per parcel and
   counted sale blocker with the parcel, the unit and every blocker field
   (`ParcelBlocker`), the list the verdicts and counts on the parcels rest
@@ -25,6 +45,42 @@ number and one tag.
   screening and inference notices, in Croatian or English, as Markdown or one
   self-contained HTML file. The same text for pasting into Claude Code is in
   `docs/due-diligence-report-prompt.md`.
+- MCP: `cadastral-mcp --transport http` serves the tools over the SDK's
+  streamable HTTP transport at `http://127.0.0.1:8080/mcp` (stateless, JSON
+  responses; `GET /health`), for clients that connect to a URL such as Claude
+  Code (`claude mcp add --transport http ...`) and the MCP Inspector. The
+  placeholder SSE endpoint, `/mcp/capabilities` and the CORS setting are
+  gone; `fastapi` and `uvicorn[standard]` are no longer
+  dependencies (the SDK brings `starlette` and `uvicorn`). The handlers run
+  the SDK client in worker threads, so one slow land-registry read no longer
+  stalls every other caller.
+- MCP: access keys for the HTTP transport. `MCP_HTTP_KEYS` in `.env` lists
+  random keys, read on every check, so removing one revokes it without a
+  restart. A key is accepted as a bearer header (Claude Code, Codex, the MCP
+  Inspector) or on the login page of the built-in OAuth 2.1 authorization
+  server (claude.ai custom connectors, ChatGPT): the client registers itself,
+  the person types a key, tokens are issued for as long as the key stays in
+  the file and kept in `MCP_HTTP_AUTH_STORE` across restarts;
+  `MCP_HTTP_PUBLIC_URL` is the issuer behind a proxy, and its hostname is
+  accepted by the DNS-rebinding protection of a loopback listener. Without
+  keys the server is open and refuses to listen anywhere but the loopback
+  interface.
+
+### Fixed
+
+- SDK: the rate limiter was a check-then-sleep on one timestamp, so
+  concurrent threads (the MCP server over HTTP) could all fire at once.
+  `cadastral_api.rate_limiter.RateLimiter` hands each caller the next slot
+  one interval apart, in both the API client and the planning WFS client;
+  the per-file GML parsers and parcel indexes and the municipality download
+  are locked as well.
+
+- SDK, CLI, MCP: a land-registry unit whose sheet A lists a parcel with a
+  possession sheet that has no number (`possessionSheetNumber: null`, unit
+  11216 of main book 221290) was rejected by the `PossessionSheet` model
+  (`INVALID_RESPONSE`, reason `validation_failed`), hiding the whole unit.
+  `possession_sheet_number` is optional now; the CLI prints `-` for it and
+  the JSON has `null`.
 
 ### Changed
 

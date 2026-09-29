@@ -16,7 +16,6 @@ from __future__ import annotations
 import logging
 import math
 import os
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -36,6 +35,7 @@ from ..models.planning_entities import (
     ZoneMatch,
     ZoningStatus,
 )
+from ..rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +112,7 @@ class PlanningWFSClient:
         self.base_urls = self._resolve_urls(base_urls, api_base_url)
         self.timeout = timeout if timeout is not None else self.DEFAULT_TIMEOUT
         self.rate_limit = rate_limit if rate_limit is not None else self.DEFAULT_RATE_LIMIT
-        self._last_request_time = 0.0
+        self._limiter = RateLimiter(self.rate_limit)
         self.client = httpx.Client(
             headers={"Accept": "application/json, */*"},
             timeout=self.timeout,
@@ -148,10 +148,8 @@ class PlanningWFSClient:
     # ------------------------------------------------------------------
 
     def _wait_for_rate_limit(self) -> None:
-        elapsed = time.time() - self._last_request_time
-        if elapsed < self.rate_limit:
-            time.sleep(self.rate_limit - elapsed)
-        self._last_request_time = time.time()
+        """One request per ``rate_limit`` across every thread using this client."""
+        self._limiter.wait()
 
     def _get(self, params: dict[str, str]) -> tuple[httpx.Response, FetchProvenance]:
         """GET the same request from each mirror in turn until one answers.

@@ -103,6 +103,7 @@ Direktorij predmemorije: ~/.cadastral_api_cache
 Veličina predmemorije: 0.0 MB
 Općine u predmemoriji: 1
   • 334979 (0.7 KB)
+Predmemorija odgovora: memory, 0 unosa, 0.0 MB
 
 API postavke
 ============

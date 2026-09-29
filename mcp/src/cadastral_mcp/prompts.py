@@ -1,9 +1,11 @@
 """MCP Prompts - Reusable templates for common workflows."""
 
+import asyncio
 import logging
 
 from cadastral_api import CadastralAPIClient
 from cadastral_api.exceptions import CadastralAPIError
+from cadastral_api.models import ParcelInfo
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,10 @@ class CadastralPrompts:
         """Initialize prompts with a cadastral API client."""
         self.client = client
 
+    async def _get_parcel(self, parcel_id: str) -> ParcelInfo:
+        """The parcel record, read in a worker thread so the server stays responsive."""
+        return await asyncio.to_thread(self.client.get_parcel_info, parcel_id)
+
     async def explain_ownership_structure(self, parcel_id: str) -> str:
         """
         Generate a prompt to explain parcel ownership structure.
@@ -34,7 +40,7 @@ class CadastralPrompts:
         try:
             logger.info(f"Generating ownership explanation prompt for parcel {parcel_id}")
 
-            parcel = self.client.get_parcel_info(parcel_id)
+            parcel = await self._get_parcel(parcel_id)
 
             prompt = f"""Analyze the ownership structure of parcel {parcel.parcel_number}:
 
@@ -89,7 +95,7 @@ Please explain:
         try:
             logger.info(f"Generating property report prompt for parcel {parcel_id}")
 
-            parcel = self.client.get_parcel_info(parcel_id)
+            parcel = await self._get_parcel(parcel_id)
 
             prompt = f"""Generate a comprehensive property report for parcel {parcel.parcel_number}:
 
@@ -157,7 +163,7 @@ Please create a detailed property report including:
 
             for idx, parcel_id in enumerate(parcel_ids, 1):
                 try:
-                    parcel = self.client.get_parcel_info(parcel_id)
+                    parcel = await self._get_parcel(parcel_id)
 
                     prompt += f"**Parcel {idx}: {parcel.parcel_number}**\n"
                     prompt += f"- Municipality: {parcel.cad_municipality_name}\n"
@@ -207,7 +213,7 @@ Please create a detailed property report including:
         try:
             logger.info(f"Generating land use summary prompt for parcel {parcel_id}")
 
-            parcel = self.client.get_parcel_info(parcel_id)
+            parcel = await self._get_parcel(parcel_id)
 
             prompt = f"""Analyze the land use distribution for parcel {parcel.parcel_number}:
 

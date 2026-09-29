@@ -29,7 +29,7 @@ class _FakeClient:
         self.unit.provenance = Provenance("land_registry", "http://mock/lr/lr-unit?x", "t")
         self.unit_calls = 0
 
-    def get_parcel_info(self, parcel_id):
+    def get_parcel_info(self, parcel_id, **kwargs):
         if str(parcel_id) == "0":
             raise CadastralAPIError(ErrorType.PARCEL_NOT_FOUND, details={"parcel_id": "0"})
         return self.parcel

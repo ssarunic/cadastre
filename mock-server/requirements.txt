@@ -1,6 +1,6 @@
 # Pinned so the mock server is reproducible. Dependabot keeps the pins current
 # (.github/dependabot.yml); the older fastapi 0.109 / uvicorn 0.27 pins pulled
-# in a starlette with published advisories and conflicted with the version
-# range the MCP server requires.
+# in a starlette with published advisories. (The MCP server no longer depends
+# on fastapi; the SDK's own starlette and uvicorn serve its HTTP transport.)
 fastapi==0.141.1
 uvicorn[standard]==0.53.0

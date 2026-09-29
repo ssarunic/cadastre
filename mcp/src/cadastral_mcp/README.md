@@ -16,15 +16,16 @@ pip install -e .
 cadastral-mcp --transport stdio
 ```
 
-### Run with HTTP (Web/Remote)
+### Run over HTTP (clients that connect to a URL)
 
 ```bash
 cadastral-mcp --transport http --port 8080
+# MCP endpoint: http://127.0.0.1:8080/mcp, health: /health; no authentication
 ```
 
 ## Documentation
 
-See [docs/MCP_SERVER.md](../../docs/MCP_SERVER.md) for complete documentation including:
+See [docs/mcp-usage-guide.md](../../../docs/mcp-usage-guide.md) for complete documentation including:
 
 - Setup and configuration
 - Claude Desktop integration
@@ -68,20 +69,20 @@ Via environment variables:
 ```bash
 CADASTRAL_API_BASE_URL=http://localhost:8000  # API URL
 CADASTRAL_LANG=hr                              # Language
-MCP_HTTP_HOST=127.0.0.1                        # HTTP host
-MCP_HTTP_PORT=8080                             # HTTP port
+MCP_HTTP_HOST=127.0.0.1                        # HTTP transport: interface (loopback)
+MCP_HTTP_PORT=8080                             # HTTP transport: port
 ```
 
 ## Project Structure
 
 ```text
-src/mcp/
+src/cadastral_mcp/
 ├── config.py         # Configuration
 ├── server.py         # Main MCPServer instance
 ├── resources.py      # Resource handlers
 ├── tools.py          # Tool handlers
 ├── prompts.py        # Prompt templates
-├── http_server.py    # FastAPI transport
+├── http_server.py    # Streamable HTTP transport (the SDK's) and /health
 └── main.py           # CLI entry point
 ```
 

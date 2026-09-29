@@ -19,15 +19,20 @@ See README.md and CLAUDE.md for complete disclaimer.
 
 import logging
 import os
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal, Protocol, TypeVar
 
 import httpx
 from dotenv import load_dotenv
 from pydantic import BaseModel, ValidationError
 
+from ..cache import Fetched, Inflight, ResponseCache
+from ..cache import from_config as cache_from_config
+from ..cache import policy as cache_policy
 from ..exceptions import CadastralAPIError, ErrorType
 from ..gis import GISCache, GMLParser, ParcelIndex
 from ..models import (
@@ -49,6 +54,7 @@ from ..models.gis_entities import ParcelGeometry
 from ..models.planning_entities import ParcelZoning
 from ..models.provenance import Provenance, Register, now_utc_iso
 from ..planning import PlanningWFSClient, validate_min_overlap
+from ..rate_limiter import RateLimiter
 from ..utils import is_building_parcel_number, normalize_parcel_number, parse_file_number
 
 # Load environment variables from .env file
@@ -63,6 +69,19 @@ UNKNOWN_FIELDS_POLICIES: tuple[str, ...] = ("warn", "ignore", "error")
 _REPORTED_UNKNOWN_FIELDS: set[str] = set()
 
 M = TypeVar("M", bound=BaseModel)
+T = TypeVar("T")
+
+
+class _Record(Protocol):
+    """A parsed record the client stamps with its provenance."""
+
+    provenance: Provenance | None
+
+
+R = TypeVar("R", bound=_Record)
+
+# Cache backend failures already logged by this process (logged once each).
+_REPORTED_CACHE_FAILURES: set[str] = set()
 
 
 def _backfill_sheet(sheet: PossessionSheet, parcels: list[SearchedParcel]) -> list[str]:
@@ -70,7 +89,7 @@ def _backfill_sheet(sheet: PossessionSheet, parcels: list[SearchedParcel]) -> li
     filled: list[str] = []
     if not parcels:
         return filled
-    if sheet.possession_sheet_id is None:
+    if sheet.possession_sheet_id is None and sheet.possession_sheet_number is not None:
         wanted = str(sheet.possession_sheet_number).strip()
         for parcel in parcels:
             for part in parcel.parcel_parts:
@@ -175,6 +194,7 @@ class CadastralAPIClient:
         unknown_fields: UnknownFieldsPolicy | None = None,
         planning_wfs_urls: list[str] | str | None = None,
         long_timeout: float | None = None,
+        cache: ResponseCache | str | None = None,
     ) -> None:
         """
         Initialize the API client.
@@ -198,6 +218,12 @@ class CadastralAPIClient:
             planning_wfs_urls: Endpoint(s) of the spatial-plan building-areas
                 WFS, tried in order (default: ``CADASTRAL_PLANNING_WFS_URLS``
                 or ``<base_url>/planning/wfs``, the mock server's imitation).
+            cache: Where upstream responses are kept between calls: a
+                ``ResponseCache`` backend, ``"memory"`` (in this process,
+                the default) or ``"off"``; None reads ``CADASTRAL_CACHE``.
+                Every response is kept for the lifetime of its data class
+                (30 min for records that name people, longer for reference
+                lists); ``refresh=True`` on a record method reads past it.
 
         Environment Variables:
             CADASTRAL_API_BASE_URL: API base URL (default: http://localhost:8000)
@@ -205,6 +231,8 @@ class CadastralAPIClient:
             CADASTRAL_API_TIMEOUT: Request timeout in seconds (default: 10.0)
             CADASTRAL_API_UNKNOWN_FIELDS: warn | ignore | error (default: warn)
             CADASTRAL_PLANNING_WFS_URLS: comma-separated building-areas WFS mirrors
+            CADASTRAL_CACHE: memory | off (default: memory)
+            CADASTRAL_CACHE_MEMORY_MB: byte budget of the memory cache (default: 64)
 
         Note:
             Before pointing the client at any server other than the included
@@ -224,9 +252,12 @@ class CadastralAPIClient:
                 f"unknown_fields must be one of {UNKNOWN_FIELDS_POLICIES}, got {policy!r}"
             )
         self.unknown_fields: UnknownFieldsPolicy = policy  # type: ignore[assignment]
-        self._last_request_time: float = 0.0
+        self._limiter = RateLimiter(self.rate_limit)
+        # Per-file parsers and indexes, built once; the lock keeps two
+        # threads asking for the same municipality from both parsing it.
         self._gml_parsers: dict[Path, tuple[int, GMLParser]] = {}
         self._parcel_indexes: dict[Path, tuple[int, ParcelIndex]] = {}
+        self._gis_lock = threading.Lock()
 
         self.headers = {
             "Accept": "application/json, text/plain, */*",
@@ -251,6 +282,11 @@ class CadastralAPIClient:
             api_base_url=self.base_url,
         )
 
+        # Upstream responses kept between calls, and the per-key locks that
+        # make concurrent identical requests one fetch.
+        self.cache: ResponseCache = cache_from_config(cache)
+        self._inflight = Inflight()
+
     def __enter__(self) -> "CadastralAPIClient":
         """Context manager entry."""
         return self
@@ -265,19 +301,12 @@ class CadastralAPIClient:
         self.planning.close()
 
     def _wait_for_rate_limit(self) -> None:
+        """Wait for this request's slot: one upstream request per ``rate_limit``.
+
+        Shared by every thread using this client (see ``RateLimiter``), so
+        concurrent callers queue one interval apart instead of bursting.
         """
-        Enforce rate limiting between requests.
-
-        Waits until enough time has passed since the last request.
-        """
-        current_time = time.time()
-        time_since_last_request = current_time - self._last_request_time
-
-        if time_since_last_request < self.rate_limit:
-            sleep_time = self.rate_limit - time_since_last_request
-            time.sleep(sleep_time)
-
-        self._last_request_time = time.time()
+        self._limiter.wait()
 
     def _request(
         self,
@@ -402,12 +431,152 @@ class CadastralAPIClient:
                 cause=e,
             ) from e
 
+    # ------------------------------------------------------------------
+    # Response cache
+    # ------------------------------------------------------------------
+
+    def _fetch(
+        self,
+        parse: Callable[[Any], T],
+        endpoint: str,
+        params: dict[str, str] | None = None,
+        *,
+        json_body: dict[str, Any] | None = None,
+        read_timeout: float | None = None,
+        use_cache: bool = True,
+    ) -> tuple[T, Fetched]:
+        """``_request`` through the response cache, parsed.
+
+        ``parse`` turns a body into the result, raising ``CadastralAPIError``
+        on an empty or invalid one. An endpoint with a data class
+        (:mod:`cadastral_api.cache.policy`) is looked up first: a stored body
+        that parses is returned with the time it was fetched, without
+        touching the rate limiter. A stored body the current models reject
+        (``INVALID_RESPONSE``: a model changed since the entry was written)
+        is deleted and treated as a miss, so a hit never raises where a miss
+        would not have. A miss holds the key's in-flight lock while the
+        request runs, so that two threads asking for the same record make
+        one fetch, and stores the body once ``parse`` has accepted it, for
+        the class lifetime; an error or an empty answer is never stored.
+        ``use_cache=False`` skips the lookup but still stores the fresh
+        response, replacing the old entry.
+        """
+        data_class = cache_policy.data_class_of(endpoint)
+        if data_class is None:
+            body = self._request(endpoint, params, json_body=json_body, read_timeout=read_timeout)
+            return parse(body), Fetched(body, now_utc_iso(), from_cache=False)
+        method = "POST" if json_body is not None else "GET"
+        key = cache_policy.cache_key(self.base_url, method, endpoint, params, json_body)
+        with self._inflight(key):
+            if use_cache:
+                hit = self._read_cache(key)
+                if hit is not None:
+                    try:
+                        return parse(hit.body), Fetched(hit.body, hit.fetched_at, from_cache=True)
+                    except CadastralAPIError as e:
+                        if e.error_type is not ErrorType.INVALID_RESPONSE:
+                            raise
+                        logger.warning(
+                            "Cached response for %s no longer parses (%s); fetching it again",
+                            endpoint,
+                            e.details.get("reason"),
+                        )
+                        self._delete_cache(key)
+            body = self._request(endpoint, params, json_body=json_body, read_timeout=read_timeout)
+            fetched_at = now_utc_iso()
+            result = parse(body)
+            if body:  # an empty answer is a "not found", never cached
+                self._write_cache(key, endpoint, data_class, body, fetched_at)
+            return result, Fetched(body, fetched_at, from_cache=False)
+
+    def _fetch_record(
+        self,
+        parse: Callable[[Any], R],
+        endpoint: str,
+        params: dict[str, str],
+        register: Register,
+        *,
+        read_timeout: float | None = None,
+        refresh: bool = False,
+    ) -> R:
+        """``_fetch`` for a record that carries provenance: fetched, parsed and stamped.
+
+        ``refresh`` reads past a cached copy. The provenance names the
+        register, the URL and when the upstream sent the record (the original
+        fetch when it came from the cache).
+        """
+        record, fetched = self._fetch(
+            parse, endpoint, params, read_timeout=read_timeout, use_cache=not refresh
+        )
+        record.provenance = self._provenance(
+            register, endpoint, params, fetched_at=fetched.fetched_at
+        )
+        return record
+
+    def _read_cache(self, key: str) -> cache_policy.Envelope | None:
+        """The decoded entry under ``key``, or None (a backend failure is a miss)."""
+        try:
+            raw = self.cache.get(key)
+        except Exception as e:  # noqa: BLE001 - the cache is optional by contract
+            self._cache_failed("get", e)
+            return None
+        if raw is None:
+            return None
+        envelope = cache_policy.decode(raw)
+        if envelope is None:
+            self._delete_cache(key)
+        return envelope
+
+    def _write_cache(
+        self,
+        key: str,
+        endpoint: str,
+        data_class: cache_policy.ClassPolicy,
+        body: Any,
+        fetched_at: str,
+    ) -> None:
+        try:
+            self.cache.set(
+                key,
+                cache_policy.encode(
+                    body, fetched_at=fetched_at, endpoint=endpoint, data_class=data_class.name
+                ),
+                data_class.lifetime,
+            )
+        except Exception as e:  # noqa: BLE001
+            self._cache_failed("set", e)
+
+    def _delete_cache(self, key: str) -> None:
+        try:
+            self.cache.delete(key)
+        except Exception as e:  # noqa: BLE001
+            self._cache_failed("delete", e)
+
+    @staticmethod
+    def _cache_failed(operation: str, error: Exception) -> None:
+        """Log a backend failure once per operation; the client carries on without the entry."""
+        marker = f"{operation}:{type(error).__name__}"
+        if marker not in _REPORTED_CACHE_FAILURES:
+            _REPORTED_CACHE_FAILURES.add(marker)
+            logger.warning("Response cache %s failed (%s); continuing without it", operation, error)
+
     def _provenance(
-        self, register: Register, endpoint: str, params: dict[str, str] | None = None
+        self,
+        register: Register,
+        endpoint: str,
+        params: dict[str, str] | None = None,
+        *,
+        fetched_at: str | None = None,
     ) -> Provenance:
-        """The provenance of a record just fetched: its register, the exact URL, the time."""
+        """The provenance of a record: its register, the exact URL, and when the upstream sent it.
+
+        ``fetched_at`` is the time of the upstream fetch (the original one
+        for a record served from the cache); without it, now.
+        """
         url = self.client.build_request("GET", endpoint, params=params).url
-        return Provenance(register=register, source_url=str(url), retrieved_at=now_utc_iso())
+        return Provenance(
+            register=register, source_url=str(url), retrieved_at=fetched_at or now_utc_iso()
+        )
 
     # ------------------------------------------------------------------
     # Response validation
@@ -480,15 +649,16 @@ class CadastralAPIClient:
         """
         endpoint = "/search-cad-parcels/offices"
 
-        response_data = self._request(endpoint)
+        def parse(body: Any) -> list[CadastralOffice]:
+            if not body:
+                raise CadastralAPIError(
+                    error_type=ErrorType.INVALID_RESPONSE,
+                    details={"endpoint": endpoint, "reason": "empty_response"},
+                )
+            return self._parse_list(CadastralOffice, body, endpoint)
 
-        if not response_data:
-            raise CadastralAPIError(
-                error_type=ErrorType.INVALID_RESPONSE,
-                details={"endpoint": endpoint, "reason": "empty_response"},
-            )
-
-        return self._parse_list(CadastralOffice, response_data, endpoint)
+        offices, _ = self._fetch(parse, endpoint)
+        return offices
 
     def find_municipality(
         self,
@@ -538,19 +708,20 @@ class CadastralAPIClient:
         if department_id:
             params["departmentId"] = str(department_id)
 
-        response_data = self._request(endpoint, params if params else None)
+        def parse(body: Any) -> list[MunicipalitySearchResult]:
+            if not body:
+                raise CadastralAPIError(
+                    error_type=ErrorType.MUNICIPALITY_NOT_FOUND,
+                    details={
+                        "search_term": search_term,
+                        "office_id": office_id,
+                        "department_id": department_id,
+                    },
+                )
+            return self._parse_list(MunicipalitySearchResult, body, endpoint)
 
-        if not response_data:
-            raise CadastralAPIError(
-                error_type=ErrorType.MUNICIPALITY_NOT_FOUND,
-                details={
-                    "search_term": search_term,
-                    "office_id": office_id,
-                    "department_id": department_id,
-                },
-            )
-
-        return self._parse_list(MunicipalitySearchResult, response_data, endpoint)
+        municipalities, _ = self._fetch(parse, endpoint, params if params else None)
+        return municipalities
 
     def find_parcel(
         self, parcel_number: str, municipality_reg_num: str
@@ -581,18 +752,19 @@ class CadastralAPIClient:
             "municipalityRegNum": municipality_reg_num,
         }
 
-        response_data = self._request(endpoint, params)
+        def parse(body: Any) -> list[ParcelSearchResult]:
+            if not body:
+                raise CadastralAPIError(
+                    error_type=ErrorType.PARCEL_NOT_FOUND,
+                    details={
+                        "parcel_number": parcel_number,
+                        "municipality_reg_num": municipality_reg_num,
+                    },
+                )
+            return self._parse_list(ParcelSearchResult, body, endpoint)
 
-        if not response_data:
-            raise CadastralAPIError(
-                error_type=ErrorType.PARCEL_NOT_FOUND,
-                details={
-                    "parcel_number": parcel_number,
-                    "municipality_reg_num": municipality_reg_num,
-                },
-            )
-
-        return self._parse_list(ParcelSearchResult, response_data, endpoint)
+        results, _ = self._fetch(parse, endpoint, params)
+        return results
 
     def find_possession_sheet(
         self, sheet_number: str, municipality_reg_num: str
@@ -614,8 +786,12 @@ class CadastralAPIClient:
         """
         endpoint = "/search-cad-parcels/possession-sheet-numbers"
         params = {"search": str(sheet_number), "municipalityRegNum": municipality_reg_num}
-        response_data = self._request(endpoint, params)
-        return self._parse_list(PossessionSheetSearchResult, response_data or [], endpoint)
+        sheets, _ = self._fetch(
+            lambda body: self._parse_list(PossessionSheetSearchResult, body or [], endpoint),
+            endpoint,
+            params,
+        )
+        return sheets
 
     def find_main_book(
         self,
@@ -645,8 +821,12 @@ class CadastralAPIClient:
             "officeId": "" if office_id is None else str(office_id),
             "institutionName": institution_name or "",
         }
-        response_data = self._request(endpoint, params)
-        return self._parse_list(MainBookSearchResult, response_data or [], endpoint)
+        books, _ = self._fetch(
+            lambda body: self._parse_list(MainBookSearchResult, body or [], endpoint),
+            endpoint,
+            params,
+        )
+        return books
 
     def find_book_of_dc(
         self,
@@ -676,8 +856,12 @@ class CadastralAPIClient:
             "officeId": "" if office_id is None else str(office_id),
             "institutionName": institution_name or "",
         }
-        response_data = self._request(endpoint, params)
-        return self._parse_list(BookOfDCSearchResult, response_data or [], endpoint)
+        books, _ = self._fetch(
+            lambda body: self._parse_list(BookOfDCSearchResult, body or [], endpoint),
+            endpoint,
+            params,
+        )
+        return books
 
     def resolve_municipality_reg_num(self, name_or_code: str | int) -> str:
         """Municipality name or registration number -> registration number.
@@ -779,12 +963,14 @@ class CadastralAPIClient:
             },
         )
 
-    def get_parcel_info(self, parcel_id: str | int) -> ParcelInfo:
+    def get_parcel_info(self, parcel_id: str | int, *, refresh: bool = False) -> ParcelInfo:
         """
         Get complete parcel information including ownership data.
 
         Args:
             parcel_id: Parcel ID obtained from search_parcel()
+            refresh: Read the record from the server again even if the cache
+                holds a copy from the last 30 minutes
 
         Returns:
             ParcelInfo object with complete parcel details
@@ -795,62 +981,67 @@ class CadastralAPIClient:
         endpoint = "/cad/parcel-info"
         params = {"parcelId": str(parcel_id)}
 
+        def parse(body: Any) -> ParcelInfo:
+            if not body:
+                raise CadastralAPIError(
+                    error_type=ErrorType.INVALID_RESPONSE,
+                    details={
+                        "endpoint": endpoint,
+                        "parcel_id": str(parcel_id),
+                        "reason": "empty_response",
+                    },
+                )
+            return self._parse(ParcelInfo, body, endpoint, {"parcel_id": str(parcel_id)})
+
         # A parcel under a large condominium is thousands of possessors that
         # the server assembles on every request: wait for it.
-        response_data = self._request(endpoint, params, read_timeout=self.long_timeout)
-
-        if not response_data:
-            raise CadastralAPIError(
-                error_type=ErrorType.INVALID_RESPONSE,
-                details={
-                    "endpoint": endpoint,
-                    "parcel_id": str(parcel_id),
-                    "reason": "empty_response",
-                },
-            )
-
-        parcel = self._parse(ParcelInfo, response_data, endpoint, {"parcel_id": str(parcel_id)})
-        parcel.provenance = self._provenance("cadastre", endpoint, params)
-        return parcel
+        return self._fetch_record(
+            parse, endpoint, params, "cadastre", read_timeout=self.long_timeout, refresh=refresh
+        )
 
     # ------------------------------------------------------------------
     # Possession sheets (posjedovni listovi)
     # ------------------------------------------------------------------
 
-    def get_possession_sheet(self, possession_sheet_id: str | int) -> PossessionSheet:
+    def get_possession_sheet(
+        self, possession_sheet_id: str | int, *, refresh: bool = False
+    ) -> PossessionSheet:
         """A possession sheet with its possessors, by the id the searches and parcel records carry.
 
         ``GET /cad/possession-sheet?possessionSheetId=``: one sheet in the
         shape of parcel-info's ``possessionSheets[]``, possessors included,
         without the sheet's parcels (see :meth:`search_parcels`).
+        ``refresh`` reads past a cached copy.
 
         Raises:
             CadastralAPIError: ``POSSESSION_SHEET_NOT_FOUND`` on an empty answer
         """
         endpoint = "/cad/possession-sheet"
         params = {"possessionSheetId": str(possession_sheet_id)}
-        response_data = self._request(endpoint, params)
-        if not response_data:
-            raise CadastralAPIError(
-                error_type=ErrorType.POSSESSION_SHEET_NOT_FOUND,
-                details={
-                    "possession_sheet_id": str(possession_sheet_id),
-                    "reason": "empty_response",
-                },
-            )
-        sheet = self._parse(PossessionSheet, response_data, endpoint, dict(params))
-        sheet.provenance = self._provenance("cadastre", endpoint, params)
-        return sheet
+
+        def parse(body: Any) -> PossessionSheet:
+            if not body:
+                raise CadastralAPIError(
+                    error_type=ErrorType.POSSESSION_SHEET_NOT_FOUND,
+                    details={
+                        "possession_sheet_id": str(possession_sheet_id),
+                        "reason": "empty_response",
+                    },
+                )
+            return self._parse(PossessionSheet, body, endpoint, dict(params))
+
+        return self._fetch_record(parse, endpoint, params, "cadastre", refresh=refresh)
 
     def get_possession_sheet_by_number(
-        self, sheet_number: str, cad_municipality_id: str | int
+        self, sheet_number: str, cad_municipality_id: str | int, *, refresh: bool = False
     ) -> PossessionSheet:
         """A possession sheet with its possessors, by number and internal municipality id.
 
         ``GET /cad/possession-sheet-by-number``; the same answer as
         :meth:`get_possession_sheet`. The municipality is the internal
         ``cadMunicipalityId`` (:meth:`resolve_municipality_id`), not the
-        registration number. The number is matched exactly.
+        registration number. The number is matched exactly. ``refresh``
+        reads past a cached copy.
 
         Raises:
             CadastralAPIError: ``POSSESSION_SHEET_NOT_FOUND`` on an empty answer
@@ -860,19 +1051,20 @@ class CadastralAPIClient:
             "possessionSheetNumber": str(sheet_number).strip(),
             "cadMunicipalityId": str(cad_municipality_id),
         }
-        response_data = self._request(endpoint, params)
-        if not response_data:
-            raise CadastralAPIError(
-                error_type=ErrorType.POSSESSION_SHEET_NOT_FOUND,
-                details={
-                    "sheet_number": str(sheet_number),
-                    "cad_municipality_id": str(cad_municipality_id),
-                    "reason": "empty_response",
-                },
-            )
-        sheet = self._parse(PossessionSheet, response_data, endpoint, dict(params))
-        sheet.provenance = self._provenance("cadastre", endpoint, params)
-        return sheet
+
+        def parse(body: Any) -> PossessionSheet:
+            if not body:
+                raise CadastralAPIError(
+                    error_type=ErrorType.POSSESSION_SHEET_NOT_FOUND,
+                    details={
+                        "sheet_number": str(sheet_number),
+                        "cad_municipality_id": str(cad_municipality_id),
+                        "reason": "empty_response",
+                    },
+                )
+            return self._parse(PossessionSheet, body, endpoint, dict(params))
+
+        return self._fetch_record(parse, endpoint, params, "cadastre", refresh=refresh)
 
     def lookup_possession_sheet_number(
         self, possession_sheet_id: str | int
@@ -886,16 +1078,20 @@ class CadastralAPIClient:
         """
         endpoint = "/cad/cad-parcels-search-data"
         params = {"possessionSheetId": str(possession_sheet_id)}
-        response_data = self._request(endpoint, params)
-        if not response_data:
-            raise CadastralAPIError(
-                error_type=ErrorType.POSSESSION_SHEET_NOT_FOUND,
-                details={
-                    "possession_sheet_id": str(possession_sheet_id),
-                    "reason": "empty_response",
-                },
-            )
-        return self._parse(PossessionSheetSearchData, response_data, endpoint, dict(params))
+
+        def parse(body: Any) -> PossessionSheetSearchData:
+            if not body:
+                raise CadastralAPIError(
+                    error_type=ErrorType.POSSESSION_SHEET_NOT_FOUND,
+                    details={
+                        "possession_sheet_id": str(possession_sheet_id),
+                        "reason": "empty_response",
+                    },
+                )
+            return self._parse(PossessionSheetSearchData, body, endpoint, dict(params))
+
+        data, _ = self._fetch(parse, endpoint, params)
+        return data
 
     #: Records ``search_parcels`` has been seen to return at most; a longer sheet
     #: has not been observed, so a cap at this size is not ruled out.
@@ -941,31 +1137,36 @@ class CadastralAPIClient:
             if possession_sheet_number
             else "",
         }
-        response_data = self._request(endpoint, json_body=body)
-        if not response_data:
+        def parse(data: Any) -> list[SearchedParcel]:
+            return self._parse_list(SearchedParcel, data, endpoint, body) if data else []
+
+        records, fetched = self._fetch(parse, endpoint, json_body=body)
+        if not records:
             return []
-        records = self._parse_list(SearchedParcel, response_data, endpoint, body)
-        provenance = self._provenance("cadastre", endpoint)
+        provenance = self._provenance("cadastre", endpoint, fetched_at=fetched.fetched_at)
         for record in records:
             if record.possession_sheet is not None:
                 record.possession_sheet.provenance = provenance
         return records
 
     def get_possession_sheet_parcels(
-        self, sheet_number: str, municipality: str | int
+        self, sheet_number: str, municipality: str | int, *, refresh: bool = False
     ) -> "PossessionSheetParcels":
         """A possession sheet by number in a municipality, with every parcel on it.
 
         Resolves the municipality (name or registration number) to its
         internal id, reads the sheet (:meth:`get_possession_sheet_by_number`)
-        and its parcels (:meth:`search_parcels`): three requests.
+        and its parcels (:meth:`search_parcels`): three requests. ``refresh``
+        reads the sheet past a cached copy; the other two may be cached.
 
         Raises:
             CadastralAPIError: ``MUNICIPALITY_NOT_FOUND``,
                 ``POSSESSION_SHEET_NOT_FOUND``
         """
         municipality_id = self.resolve_municipality_id(municipality)
-        sheet = self.get_possession_sheet_by_number(sheet_number, municipality_id)
+        sheet = self.get_possession_sheet_by_number(
+            sheet_number, municipality_id, refresh=refresh
+        )
         parcels = self.search_parcels(
             cad_municipality_id=municipality_id, possession_sheet_number=sheet_number
         )
@@ -978,7 +1179,12 @@ class CadastralAPIClient:
         )
 
     def get_parcel_by_number(
-        self, parcel_number: str, municipality_reg_num: str, exact_match: bool = True
+        self,
+        parcel_number: str,
+        municipality_reg_num: str,
+        exact_match: bool = True,
+        *,
+        refresh: bool = False,
     ) -> ParcelInfo | None:
         """
         Convenience method to find and retrieve parcel info in one call.
@@ -988,6 +1194,8 @@ class CadastralAPIClient:
                 spelling ("35/1.ZGR", "zgr. 35/1", "*35/1")
             municipality_reg_num: Municipality registration number
             exact_match: If True, only return exact parcel number match
+            refresh: Read the parcel record from the server again (the
+                number search may still come from the cache)
 
         Returns:
             ParcelInfo object if found, None otherwise
@@ -1008,7 +1216,7 @@ class CadastralAPIClient:
         if exact_match:
             for result in search_results:
                 if result.parcel_number == wanted:
-                    return self.get_parcel_info(result.parcel_id)
+                    return self.get_parcel_info(result.parcel_id, refresh=refresh)
             candidates = [r.parcel_number for r in search_results]
             if not is_building_parcel_number(wanted) and f"*{wanted}" in candidates:
                 raise CadastralAPIError(
@@ -1023,7 +1231,7 @@ class CadastralAPIClient:
             return None
 
         # Return first result
-        return self.get_parcel_info(search_results[0].parcel_id)
+        return self.get_parcel_info(search_results[0].parcel_id, refresh=refresh)
 
     def get_parcel_geometry(
         self, parcel_number: str, municipality_reg_num: str
@@ -1073,9 +1281,10 @@ class CadastralAPIClient:
         gets a new parser.
         """
         mtime = gml_path.stat().st_mtime_ns
-        cached = self._gml_parsers.get(gml_path)
-        if cached is None or cached[0] != mtime:
-            cached = self._gml_parsers[gml_path] = (mtime, GMLParser(gml_path))
+        with self._gis_lock:
+            cached = self._gml_parsers.get(gml_path)
+            if cached is None or cached[0] != mtime:
+                cached = self._gml_parsers[gml_path] = (mtime, GMLParser(gml_path))
         return cached[1]
 
     def get_parcel_index(self, municipality_reg_num: str) -> ParcelIndex:
@@ -1093,10 +1302,12 @@ class CadastralAPIClient:
         """
         gml_path = self.gis_cache.get_parcel_data(municipality_reg_num, auto_download=True)
         mtime = gml_path.stat().st_mtime_ns
-        cached = self._parcel_indexes.get(gml_path)
-        if cached is None or cached[0] != mtime:
-            parcels = self._gml_parser(gml_path).get_all_parcels()
-            cached = self._parcel_indexes[gml_path] = (mtime, ParcelIndex(parcels))
+        parser = self._gml_parser(gml_path)
+        with self._gis_lock:
+            cached = self._parcel_indexes.get(gml_path)
+            if cached is None or cached[0] != mtime:
+                index = ParcelIndex(parser.get_all_parcels())
+                cached = self._parcel_indexes[gml_path] = (mtime, index)
         return cached[1]
 
     def get_parcel_zoning(
@@ -1162,6 +1373,7 @@ class CadastralAPIClient:
         historical_overview: bool = False,
         *,
         main_book_name: str | None = None,
+        refresh: bool = False,
     ) -> LandRegistryUnitDetailed:
         """
         Get detailed land registry unit information including all sheets (A, B, C).
@@ -1180,6 +1392,8 @@ class CadastralAPIClient:
             main_book_name: Main book name (e.g., "SAVAR"), resolved to its id
                 through the main-book search (:meth:`resolve_main_book_id`)
                 when ``main_book_id`` is not given.
+            refresh: Read the unit from the server again even if the cache
+                holds a copy from the last 30 minutes.
 
         Returns:
             LandRegistryUnitDetailed object with complete unit information
@@ -1224,39 +1438,45 @@ class CadastralAPIClient:
             "historicalOverview": str(historical_overview).lower(),
         }
 
-        # A unit of thousands of shares takes the server 20 s or more to
-        # assemble (unpaged, uncached): wait for it.
-        response_data = self._request(endpoint, params, read_timeout=self.long_timeout)
-
-        if not response_data:
-            raise CadastralAPIError(
-                error_type=ErrorType.LR_UNIT_NOT_FOUND,
-                details={
-                    "lr_unit_number": lr_unit_number,
-                    "main_book_id": main_book_id,
-                    "reason": "empty_response",
-                },
+        def parse(body: Any) -> LandRegistryUnitDetailed:
+            if not body:
+                raise CadastralAPIError(
+                    error_type=ErrorType.LR_UNIT_NOT_FOUND,
+                    details={
+                        "lr_unit_number": lr_unit_number,
+                        "main_book_id": main_book_id,
+                        "reason": "empty_response",
+                    },
+                )
+            # API returns a list, typically with one element (an empty list
+            # was rejected above as an empty response)
+            if isinstance(body, list):
+                body = body[0]
+            return self._parse(
+                LandRegistryUnitDetailed,
+                body,
+                endpoint,
+                {"lr_unit_number": lr_unit_number, "main_book_id": main_book_id},
             )
 
-        # API returns a list, typically with one element (an empty list was
-        # rejected above as an empty response)
-        if isinstance(response_data, list):
-            response_data = response_data[0]
-
-        lr_unit = self._parse(
-            LandRegistryUnitDetailed,
-            response_data,
+        # A unit of thousands of shares takes the server 20 s or more to
+        # assemble (unpaged, uncached upstream): wait for it.
+        return self._fetch_record(
+            parse,
             endpoint,
-            {"lr_unit_number": lr_unit_number, "main_book_id": main_book_id},
+            params,
+            "land_registry",
+            read_timeout=self.long_timeout,
+            refresh=refresh,
         )
-        lr_unit.provenance = self._provenance("land_registry", endpoint, params)
-        return lr_unit
 
     def get_lr_unit_from_parcel(
         self,
         parcel_number: str,
         municipality: str | int,
         historical_overview: bool = False,
+        *,
+        refresh: bool = False,
     ) -> LandRegistryUnitDetailed:
         """
         Convenience method to get LR unit details by first looking up parcel.
@@ -1269,6 +1489,9 @@ class CadastralAPIClient:
             parcel_number: Parcel number (e.g., "103/2", "279/6")
             municipality: Municipality name (e.g., "SAVAR") or registration number (e.g., "334979")
             historical_overview: Include historical data (default: False)
+            refresh: Read the parcel record and the unit from the server
+                again; the municipality and parcel-number lookups may still
+                come from the cache
 
         Returns:
             LandRegistryUnitDetailed object with complete unit information
@@ -1298,7 +1521,9 @@ class CadastralAPIClient:
         municipality_reg_num = self.resolve_municipality_reg_num(municipality)
 
         # Get parcel info to extract LR unit details
-        parcel_info = self.get_parcel_by_number(parcel_number, municipality_reg_num)
+        parcel_info = self.get_parcel_by_number(
+            parcel_number, municipality_reg_num, refresh=refresh
+        )
 
         if not parcel_info:
             raise CadastralAPIError(
@@ -1333,6 +1558,7 @@ class CadastralAPIClient:
             lr_unit_number=lr_unit_number,
             main_book_id=main_book_id,
             historical_overview=historical_overview,
+            refresh=refresh,
         )
         lr_unit.lr_unit_derived_from_links = derived_from_links
         lr_unit.cadastre_harmonized = parcel_info.is_harmonized
@@ -1399,7 +1625,14 @@ class CadastralAPIClient:
             return None
         code, order_number, year = parts
 
-        response_data = self._request(
+        def parse(body: Any) -> FileStatus | None:
+            # The endpoint answers an unknown file with an empty object, not a 404.
+            if not body:
+                return None
+            return self._parse(FileStatus, body, "/lr/file-status", {"file_number": file_number})
+
+        status, _ = self._fetch(
+            parse,
             "/lr/file-status",
             json_body={
                 "lrFileCode": code,
@@ -1408,14 +1641,7 @@ class CadastralAPIClient:
                 "institutionId": institution_id,
             },
         )
-
-        # The endpoint answers an unknown file with an empty object, not a 404.
-        if not response_data:
-            return None
-
-        return self._parse(
-            FileStatus, response_data, "/lr/file-status", {"file_number": file_number}
-        )
+        return status
 
     def get_plombe_details(
         self, lr_unit: LandRegistryUnitDetailed

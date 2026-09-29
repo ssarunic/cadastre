@@ -38,7 +38,7 @@ class _FakeClient:
             json.loads(FIXTURE.read_text(encoding="utf-8"))
         )
 
-    def get_parcel_info(self, parcel_id: str) -> ParcelInfo:
+    def get_parcel_info(self, parcel_id: str, **kwargs) -> ParcelInfo:
         return self._parcel
 
 
@@ -210,7 +210,7 @@ class _FakeCondominiumClient:
         raw["possessionSheets"] = [first, second]
         self._parcel = ParcelInfo.model_validate(raw)
 
-    def get_parcel_info(self, parcel_id: str) -> ParcelInfo:
+    def get_parcel_info(self, parcel_id: str, **kwargs) -> ParcelInfo:
         return self._parcel
 
 
@@ -400,7 +400,7 @@ def test_a_bad_reference_is_an_invalid_request(tools) -> None:
 
 
 class _FakeClientRefusing(_FakeClient):
-    def get_parcel_info(self, parcel_id: str) -> ParcelInfo:
+    def get_parcel_info(self, parcel_id: str, **kwargs) -> ParcelInfo:
         from cadastral_api.exceptions import CadastralAPIError, ErrorType
 
         if str(parcel_id) == "403":

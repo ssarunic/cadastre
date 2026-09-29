@@ -47,6 +47,7 @@ Ništa. Ova naredba ne traži unos i ništa ne mijenja.
    Veličina predmemorije: 0.0 MB
    Općine u predmemoriji: 1
      • 334979 (0.7 KB)
+   Predmemorija odgovora: memory, 0 unosa, 0.0 MB
 
    API postavke
    ============
@@ -61,8 +62,10 @@ Ništa. Ova naredba ne traži unos i ništa ne mijenja.
 4. **API osnova** je adresa poslužitelja s kojim alat razgovara. Za vježbu to je
    adresa probnog poslužitelja na vašem računalu. **Informacije o predmemoriji**
    ispisuje općine čiji su podaci o granicama pohranjeni na vašem računalu; alat
-   tu pohranu naziva predmemorijom. **API postavke** pokazuje koliko alat čeka
-   između zahtjeva i koliko dugo čeka odgovor.
+   tu pohranu naziva predmemorijom. Redak **Predmemorija odgovora** kaže čuvaju
+   li se odgovori poslužitelja u memoriji dok naredba radi (čuvaju se, osim ako
+   piše `off`). **API postavke** pokazuje koliko alat čeka između zahtjeva i
+   koliko dugo čeka odgovor.
 
 ## Što možete odabrati
 

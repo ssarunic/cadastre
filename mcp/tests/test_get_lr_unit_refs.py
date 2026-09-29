@@ -39,7 +39,12 @@ class _FakeClient:
         self.calls: list[tuple] = []
 
     def get_lr_unit_detailed(
-        self, unit_number, main_book_id=None, main_book_name=None, historical_overview=False
+        self,
+        unit_number,
+        main_book_id=None,
+        main_book_name=None,
+        historical_overview=False,
+        **kwargs,
     ):
         self.calls.append(("unit", unit_number, main_book_id, main_book_name))
         if unit_number == "999999":
@@ -48,7 +53,9 @@ class _FakeClient:
             )
         return self.unit
 
-    def get_lr_unit_from_parcel(self, parcel_number, municipality, historical_overview=False):
+    def get_lr_unit_from_parcel(
+        self, parcel_number, municipality, historical_overview=False, **kwargs
+    ):
         self.calls.append(("parcel", parcel_number, municipality))
         return self.unit
 
@@ -196,7 +203,9 @@ def test_historical_overview_is_passed_to_the_client() -> None:
             [{"lr_unit_number": "449", "main_book_id": 21277}], historical_overview=True
         )
     )
-    assert client.calls == [{"main_book_name": None, "historical_overview": True}]
+    assert client.calls == [
+        {"main_book_name": None, "historical_overview": True, "refresh": False}
+    ]
 
 
 def test_owners_limit_is_a_synonym_of_limit(tools) -> None:

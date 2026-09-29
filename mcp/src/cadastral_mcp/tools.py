@@ -278,12 +278,12 @@ class CadastralTools:
             logger.info(f"Searching for parcel {parcel_number} in {municipality}")
 
             # Step 1: Resolve municipality if needed
-            muni_code = self._resolve_municipality(municipality)
+            muni_code = await self._municipality_code(municipality)
 
             # Step 2: Find parcel. The server matches on a substring, so prefer
             # the exact number (in the API spelling: "35/1.ZGR" -> "*35/1").
             wanted = normalize_parcel_number(parcel_number)
-            results = self.client.find_parcel(wanted, muni_code)
+            results = await asyncio.to_thread(self.client.find_parcel, wanted, muni_code)
 
             matches: dict[str, Any] = {}
             if max_matches > 0:
@@ -338,7 +338,7 @@ class CadastralTools:
                     r.parcel_number for r in siblings
                 ][: self.MAX_OTHER_MATCHES]
             response.update(matches)
-            geometry = self._geometry_for(result.parcel_number, muni_code)
+            geometry = await asyncio.to_thread(self._geometry_for, result.parcel_number, muni_code)
             if geometry is not None:
                 response["map_url"] = geometry.map_url()
             return response, geometry
@@ -454,6 +454,7 @@ class CadastralTools:
         limit: int | None = None,
         possessor_name: str | None = None,
         condominium_unit: str | None = None,
+        refresh: bool = False,
     ) -> dict[str, Any]:
         """
         Fetch the detailed cadastre record of one or more parcels.
@@ -535,7 +536,9 @@ class CadastralTools:
                 continue
             try:
                 results.append(
-                    await self._get_one_parcel(ref, source, offset, limit, possessor_filter)
+                    await self._get_one_parcel(
+                        ref, source, offset, limit, possessor_filter, refresh=refresh
+                    )
                 )
             except Exception as e:  # noqa: BLE001 - recorded per item on purpose
                 logger.error(f"Failed to fetch parcel {ref}: {e}")
@@ -561,9 +564,11 @@ class CadastralTools:
         offset: int = 0,
         limit: int | None = None,
         possessor_filter: dict[str, Any] | None = None,
+        *,
+        refresh: bool = False,
     ) -> dict[str, Any]:
         """The ``results`` entry of one parcel reference (raises on failure)."""
-        parcel, geometry, search_result = await self._load_parcel(ref)
+        parcel, geometry, search_result = await self._load_parcel(ref, refresh=refresh)
         result_data = parcel.model_dump(mode="json")
         # Retrieval provenance describes the entry, so it sits next to
         # ``register`` rather than inside the record it is about.
@@ -585,6 +590,9 @@ class CadastralTools:
             result_data.pop("possession_sheets", None)
         else:
             page = self._window_possessors(result_data, offset, limit, possessor_filter)
+            fetched_at = (provenance or {}).get("retrieved_at")
+            if fetched_at:
+                page["fetched_at"] = fetched_at
         if source == "land_registry":
             result_data["land_registry_hint"] = self._lr_unit_hint(parcel)
 
@@ -617,7 +625,7 @@ class CadastralTools:
         return entry
 
     async def _load_parcel(
-        self, ref: ParcelRef
+        self, ref: ParcelRef, *, refresh: bool = False
     ) -> tuple[ParcelInfo, ParcelGeometry | None, dict[str, Any] | None]:
         """The record a reference names, its outline (best effort) and the search response.
 
@@ -637,9 +645,11 @@ class CadastralTools:
                 ref.parcel_number, ref.municipality, 0
             )
             parcel_id = search_result["parcel_id"]
-        parcel = self.client.get_parcel_info(parcel_id)
+        parcel = await asyncio.to_thread(self.client.get_parcel_info, parcel_id, refresh=refresh)
         if search_result is None:
-            geometry = self._geometry_for(parcel.parcel_number, parcel.cad_municipality_reg_num)
+            geometry = await asyncio.to_thread(
+                self._geometry_for, parcel.parcel_number, parcel.cad_municipality_reg_num
+            )
         return parcel, geometry, search_result
 
     #: Relative difference between two areas of one parcel above which they disagree.
@@ -846,7 +856,7 @@ class CadastralTools:
         """
         try:
             logger.info(f"Resolving municipality: {name_or_code}")
-            municipalities = self.client.find_municipality(name_or_code)
+            municipalities = await asyncio.to_thread(self.client.find_municipality, name_or_code)
             if name_or_code.isdigit():
                 municipalities = [
                     m for m in municipalities if m.municipality_reg_num == name_or_code
@@ -901,8 +911,11 @@ class CadastralTools:
                 f"Listing municipalities (search={search}, office={office_id}, "
                 f"department={department_id})"
             )
-            municipalities = self.client.find_municipality(
-                search, office_id=office_id, department_id=department_id
+            municipalities = await asyncio.to_thread(
+                self.client.find_municipality,
+                search,
+                office_id=office_id,
+                department_id=department_id,
             )
             window = self._window(municipalities, offset, limit)
             return {
@@ -951,10 +964,12 @@ class CadastralTools:
             )
 
             # Resolve municipality
-            muni_code = self._resolve_municipality(municipality)
+            muni_code = await self._municipality_code(municipality)
 
             # Fetch geometry using SDK (None when the parcel is not in the GML)
-            geometry = self.client.get_parcel_geometry(parcel_number, muni_code)
+            geometry = await asyncio.to_thread(
+                self.client.get_parcel_geometry, parcel_number, muni_code
+            )
             if geometry is None:
                 raise ValueError(
                     f"Parcel '{parcel_number}' has no geometry in the GIS data for "
@@ -1017,7 +1032,7 @@ class CadastralTools:
         min_overlap = validate_min_overlap(min_overlap)
         try:
             logger.info(f"Fetching zoning for {parcel_number} in {municipality}")
-            muni_code = self._resolve_municipality(municipality)
+            muni_code = await self._municipality_code(municipality)
             zoning = await asyncio.to_thread(
                 self.client.get_parcel_zoning, parcel_number, muni_code, min_overlap
             )
@@ -1090,7 +1105,7 @@ class CadastralTools:
         try:
             logger.info(f"Listing cadastral offices (filter: {filter_name})")
 
-            offices = self.client.list_cadastral_offices()
+            offices = await asyncio.to_thread(self.client.list_cadastral_offices)
 
             # Apply filter if provided
             if filter_name:
@@ -1122,8 +1137,20 @@ class CadastralTools:
     }
 
     @staticmethod
-    def _page(offset: int, limit: int | None, total: int, returned: int) -> dict[str, Any]:
-        """The paging block of a shaped unit: which window of the list came back."""
+    def _page(
+        offset: int,
+        limit: int | None,
+        total: int,
+        returned: int,
+        *,
+        fetched_at: str | None = None,
+    ) -> dict[str, Any]:
+        """The paging block of a shaped unit: which window of the list came back.
+
+        ``fetched_at`` is when the upstream sent the record the window was
+        cut from (the original fetch when it was served from the response
+        cache), so the agent can say how old the record is.
+        """
         truncated = offset + returned < total
         page: dict[str, Any] = {
             "offset": offset,
@@ -1134,6 +1161,8 @@ class CadastralTools:
         }
         if truncated:
             page["next_offset"] = offset + returned
+        if fetched_at is not None:
+            page["fetched_at"] = fetched_at
         return page
 
     @staticmethod
@@ -1366,6 +1395,8 @@ class CadastralTools:
         )
         flags_summary = count_owner_flags(row.flags for row in flag_rows)
         summary = lr_unit.summary()
+        provenance = getattr(lr_unit, "provenance", None)
+        fetched_at = provenance.retrieved_at if provenance is not None else None
         is_condo = lr_unit.is_condominium()
         # Different people among the owner records, whatever the window or
         # filter: one person holding two shares is two records and one owner.
@@ -1414,7 +1445,7 @@ class CadastralTools:
                 # emptied; say how many so the count is not read as the unit's
                 # full sheet B.
                 result["shares_omitted"] = omitted
-            result["page"] = cls._page(offset, limit, matching, returned)
+            result["page"] = cls._page(offset, limit, matching, returned, fetched_at=fetched_at)
             result["summary"] = summary
             result["sale_blockers"] = brief
             result["owner_flags_summary"] = flags_summary
@@ -1435,7 +1466,9 @@ class CadastralTools:
                     entry.model_dump(mode="json")
                     for entry in lr_unit.possessory_sheet_a2.lr_entries
                 ],
-                "page": cls._page(offset, limit, len(sheet.cad_parcels), len(window)),
+                "page": cls._page(
+                    offset, limit, len(sheet.cad_parcels), len(window), fetched_at=fetched_at
+                ),
                 "summary": summary,
                 "sale_blockers": brief,
                 **condo_fields,
@@ -1450,7 +1483,7 @@ class CadastralTools:
                 **cls._identity(lr_unit),
                 "entry_groups": [group.model_dump(mode="json") for group in window],
                 "total_entry_groups": len(groups),
-                "page": cls._page(offset, limit, len(groups), len(window)),
+                "page": cls._page(offset, limit, len(groups), len(window), fetched_at=fetched_at),
                 "summary": summary,
                 "sale_blockers": blockers,
                 **condo_fields,
@@ -1479,7 +1512,7 @@ class CadastralTools:
             result["matching_owners"] = matching
         result.update({
             "owners_truncated": truncated,
-            "page": cls._page(offset, limit, matching, len(owners)),
+            "page": cls._page(offset, limit, matching, len(owners), fetched_at=fetched_at),
             "share_entries": lr_unit.ownership_sheet_b.share_entry_rows(),
             "summary": summary,
             "sale_blockers": blockers,
@@ -1595,6 +1628,7 @@ class CadastralTools:
         limit: int | None = None,
         owner_name: str | None = None,
         condominium_unit: str | None = None,
+        refresh: bool = False,
     ) -> dict[str, Any]:
         """
         Get one or more land registry units (zemljišnoknjižni uložak).
@@ -1700,7 +1734,9 @@ class CadastralTools:
                 continue
 
             try:
-                lr_unit = self._fetch_lr_unit(ref, historical_overview)
+                lr_unit = await asyncio.to_thread(
+                    self._fetch_lr_unit, ref, historical_overview, refresh=refresh
+                )
             except Exception as e:  # noqa: BLE001 - recorded per item on purpose
                 logger.error(f"Failed to fetch {ref.describe()}: {e}")
                 entry.update(status="error", **error_fields(e))
@@ -1722,7 +1758,7 @@ class CadastralTools:
                 statuses: dict[str, FileStatus] | None = None
                 if include_plombe_detail:
                     statuses = (
-                        self.client.get_plombe_details(lr_unit)
+                        await asyncio.to_thread(self.client.get_plombe_details, lr_unit)
                         if lr_unit.has_pending_plombe()
                         else {}
                     )
@@ -1771,14 +1807,19 @@ class CadastralTools:
             response["condominium_unit"] = condominium_unit
         return response
 
-    def _fetch_lr_unit(self, ref: LRUnitRef, historical_overview: bool = False) -> Any:
+    def _fetch_lr_unit(
+        self, ref: LRUnitRef, historical_overview: bool = False, *, refresh: bool = False
+    ) -> Any:
         """Fetch the unit a reference names; errors carry a message for the agent."""
         try:
             if ref.by_parcel:
                 assert ref.parcel_number is not None and ref.municipality is not None
                 muni_code = self._resolve_municipality(ref.municipality)
                 return self.client.get_lr_unit_from_parcel(
-                    ref.parcel_number, muni_code, historical_overview=historical_overview
+                    ref.parcel_number,
+                    muni_code,
+                    historical_overview=historical_overview,
+                    refresh=refresh,
                 )
             assert ref.lr_unit_number is not None
             return self.client.get_lr_unit_detailed(
@@ -1786,6 +1827,7 @@ class CadastralTools:
                 ref.main_book_id,
                 main_book_name=ref.main_book_name,
                 historical_overview=historical_overview,
+                refresh=refresh,
             )
         except CadastralAPIError as e:
             raise ValueError(
@@ -1810,7 +1852,9 @@ class CadastralTools:
         """
         try:
             logger.info(f"Fetching file status {file_number} at institution {institution_id}")
-            status = self.client.get_file_status(file_number, int(institution_id))
+            status = await asyncio.to_thread(
+                self.client.get_file_status, file_number, int(institution_id)
+            )
         except CadastralAPIError as e:
             logger.error(f"File status failed for {file_number}: {e}", exc_info=True)
             raise ValueError(
@@ -1964,7 +2008,7 @@ class CadastralTools:
         unit, so the pending requests among the sale blockers are named.
         """
         parcel, geometry, _search = await self._load_parcel(ref)
-        unit, unit_error = self._unit_of(parcel, units)
+        unit, unit_error = await asyncio.to_thread(self._unit_of, parcel, units)
         detail: dict[str, FileStatus] | None = None
         if plombe is not None and unit is not None:
             # Asked for: an empty map when the unit has no plomba, so the
@@ -1972,7 +2016,9 @@ class CadastralTools:
             key = (str(unit.lr_unit_number), int(unit.main_book_id))
             if key not in plombe:
                 plombe[key] = (
-                    self.client.get_plombe_details(unit) if unit.has_pending_plombe() else {}
+                    await asyncio.to_thread(self.client.get_plombe_details, unit)
+                    if unit.has_pending_plombe()
+                    else {}
                 )
             detail = plombe[key]
         comparison = compare_registers(
@@ -2200,7 +2246,7 @@ class CadastralTools:
 
     async def _parcel_index(self, municipality: str) -> tuple[str, ParcelIndex]:
         """The municipality's code and spatial index (built in a worker thread)."""
-        muni_code = self._resolve_municipality(municipality)
+        muni_code = await self._municipality_code(municipality)
         try:
             index = await asyncio.to_thread(self.client.get_parcel_index, muni_code)
         except CadastralAPIError:
@@ -2460,7 +2506,7 @@ class CadastralTools:
             {"municipality_code", "download_url", "already_cached", "downloaded_at",
             "zip_path", "zip_size_bytes", "gml_path", "parcel_count", "source"}.
         """
-        muni_code = self._resolve_municipality(municipality)
+        muni_code = await self._municipality_code(municipality)
         cache = self.client.gis_cache
         already_cached = cache.is_cached(muni_code) and not force
         try:
@@ -2505,7 +2551,9 @@ class CadastralTools:
         """
         try:
             logger.info(f"Finding main books (search={search}, office={office_id})")
-            books = self.client.find_main_book(search, office_id, institution_name)
+            books = await asyncio.to_thread(
+                self.client.find_main_book, search, office_id, institution_name
+            )
             return {
                 "main_books": [search_record(book) for book in books],
                 "count": len(books),
@@ -2528,7 +2576,9 @@ class CadastralTools:
         """
         try:
             logger.info(f"Finding books of deposited contracts (search={search})")
-            books = self.client.find_book_of_dc(search, office_id, institution_name)
+            books = await asyncio.to_thread(
+                self.client.find_book_of_dc, search, office_id, institution_name
+            )
             return {
                 "books_of_dc": [search_record(book) for book in books],
                 "count": len(books),
@@ -2707,8 +2757,10 @@ class CadastralTools:
         """
         try:
             logger.info(f"Finding possession sheet {sheet_number} in {municipality}")
-            muni_code = self._resolve_municipality(municipality)
-            sheets = self.client.find_possession_sheet(sheet_number, muni_code)
+            muni_code = await self._municipality_code(municipality)
+            sheets = await asyncio.to_thread(
+                self.client.find_possession_sheet, sheet_number, muni_code
+            )
             return {
                 "possession_sheets": [search_record(sheet) for sheet in sheets],
                 "municipality_code": muni_code,
@@ -2734,6 +2786,10 @@ class CadastralTools:
         except Exception as e:  # noqa: BLE001 - the geometry is optional
             logger.warning(f"No GIS geometry for {parcel_number} in {muni_code}: {e}")
             return None
+
+    async def _municipality_code(self, name_or_code: str) -> str:
+        """``_resolve_municipality`` in a worker thread, for the async handlers."""
+        return await asyncio.to_thread(self._resolve_municipality, name_or_code)
 
     def _resolve_municipality(self, name_or_code: str) -> str:
         """Municipality name or code -> registration code (see the SDK resolver).

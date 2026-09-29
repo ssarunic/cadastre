@@ -23,6 +23,7 @@ for the record, may be stale).
 | [web-map-exploration.md](web-map-exploration.md) | research | A web page that shows parcels on a map and queries a drawn area: base-map and imagery sources and their licences, map libraries, Google Maps assessment, recommended stack, open items | web map, OpenLayers, MapLibre, Leaflet, OpenFreeMap, Protomaps, OpenStreetMap, ODbL, DGU DOF, ortofoto, satellite, Google Maps, draw area, spatial index, STRtree |
 | [sale-blockers-specification.md](sale-blockers-specification.md) | implemented | What is registered against a land-registry unit that bears on a sale, read into typed blockers with severity, scope and a screening verdict; the inferred owner flags (likely deceased, address abroad, public body); the classification table, the scope and cancellation rules, where each surface shows them | sale blockers, zapreke prodaji, teret, plomba, hipoteka, spor, ovrha, prvokup, služnost, verdict, likely_deceased, address_abroad, public_body, condominium scope, detect_blockers, owner_flags, --blockers |
 | [ko-wide-scan-decision.md](ko-wide-scan-decision.md) | draft | Whether to read every parcel of a cadastral municipality to answer the possession-sheet and person-search questions the API cannot: cost, terms of service, personal data, options and a pending decision | k.o.-wide scan, posjedovni list, person search, rate limit, personal data, legal basis, decision memo |
+| [response-cache-specification.md](response-cache-specification.md) | partial | Cache of upstream responses in the SDK client: one interface, memory, memory plus disk, Redis or Valkey and cluster backends; keys, data classes and lifetimes, personal-data policy, CLI, MCP and gateway surfaces; wire budget for MCP results and result artifacts read in increments (tool, resource, gateway URL) | cache, response cache, TTL, cachetools, diskcache, Redis, Valkey, memcached, CADASTRAL_CACHE, refresh, fetched_at, 1 MB, structuredContent, wire budget, read_result, result artifact, paging |
 | [gateway-service.md](gateway-service.md) | draft | Hosted REST plus remote MCP service exposing the SDK: architecture, REST conventions, OAuth, caching, deployment phases | gateway, REST, remote MCP, FastAPI, API keys, OAuth 2.1, cache, deployment |
 | [mcp-server.md](mcp-server.md) | reference | MCP server architecture, tools, resources, prompts, transports, configuration for AI clients | MCP, tools, resources, prompts, stdio, HTTP, Claude Desktop, claude.ai |
 | [mcp-client-efficiency.md](mcp-client-efficiency.md) | partial | Reducing MCP round trips and token use: source register, list tools, detail levels, limits | MCP, efficiency, tokens, source, owners_limit, detail, batching |
@@ -52,7 +53,8 @@ for the record, may be stale).
 - **Maps, geometry, imagery, web front end:**
   web-map-exploration, spatial-planning-api-specification (section 9), croatian-cadastral-api-specification (WFS, ATOM), parcel-locator-specification
 - **MCP server and AI clients:** mcp-server, mcp-client-efficiency, gateway-service
-- **Hosting and deployment:** gateway-service
+- **Hosting and deployment:** gateway-service, response-cache-specification
+- **Caching and response size:** response-cache-specification, mcp-client-efficiency
 - **Croatian wording, command and output names:** terminology, i18n-guide
 - **Translations and the po workflow:** i18n-guide, i18n-status, localization_example.py
 - **CLI user documentation:** documentation-guide

@@ -9,6 +9,8 @@ from typing import Annotated, Any, Literal
 
 from cadastral_api import CadastralAPIClient
 from cadastral_api.exceptions import CadastralAPIError
+from mcp.server.auth.provider import OAuthAuthorizationServerProvider
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ResourceError, ToolError
 from pydantic import Field
@@ -93,9 +95,18 @@ anticipated_tool = _anticipated(ToolError)
 anticipated_resource = _anticipated(ResourceError)
 
 
-def create_mcp_server() -> MCPServer:
+def create_mcp_server(
+    *,
+    auth: AuthSettings | None = None,
+    auth_server_provider: OAuthAuthorizationServerProvider[Any, Any, Any] | None = None,
+) -> MCPServer:
     """
     Create and configure the Cadastral MCP server.
+
+    Args:
+        auth: The SDK's auth settings, with ``auth_server_provider``, when the
+            HTTP transport requires a key (``cadastral_mcp.auth``); stdio
+            never authenticates.
 
     Returns:
         Configured MCPServer server instance
@@ -105,6 +116,8 @@ def create_mcp_server() -> MCPServer:
         name=config.server_name,
         version=config.server_version,
         instructions=SERVER_INSTRUCTIONS,
+        auth=auth,
+        auth_server_provider=auth_server_provider,
     )
 
     # Initialize cadastral API client (shared across all requests)
@@ -117,6 +130,7 @@ def create_mcp_server() -> MCPServer:
         rate_limit=config.api_rate_limit,
         cache_dir=str(config.cache_dir),
         unknown_fields="ignore",
+        cache=config.cache,
     )
 
     # Initialize handlers
@@ -127,6 +141,7 @@ def create_mcp_server() -> MCPServer:
     logger.info(f"Initializing {config.server_name} v{config.server_version}")
     logger.info(f"API Base URL: {config.api_base_url}")
     logger.info(f"Cache Directory: {config.cache_dir}")
+    logger.info(f"Response cache: {config.cache or 'memory (default)'}")
 
     # ========================================================================
     # RESOURCES - Read-only contextual data
@@ -291,6 +306,12 @@ def create_mcp_server() -> MCPServer:
                 )
             ),
         ] = None,
+        refresh: Annotated[
+            bool,
+            Field(
+                description="Fetch the record again, ignoring the copy of the last 30 min"
+            ),
+        ] = False,
     ) -> dict[str, Any]:
         """
         Get the detailed cadastre (katastar) record of one or more parcels
@@ -371,6 +392,7 @@ def create_mcp_server() -> MCPServer:
             limit=limit,
             possessor_name=possessor_name,
             condominium_unit=condominium_unit,
+            refresh=refresh,
         )
 
     @mcp.tool()
@@ -724,6 +746,15 @@ def create_mcp_server() -> MCPServer:
                 )
             ),
         ] = None,
+        refresh: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Fetch the unit again, ignoring the copy of the last 30 min; paging never "
+                    "needs it"
+                )
+            ),
+        ] = False,
     ) -> dict[str, Any]:
         """
         Get one or more land registry units (zemljišnoknjižni uložak, zemljišne
@@ -799,6 +830,7 @@ def create_mcp_server() -> MCPServer:
             limit=limit,
             owner_name=owner_name,
             condominium_unit=condominium_unit,
+            refresh=refresh,
         )
 
     @mcp.tool()

@@ -400,6 +400,17 @@ def info(ctx: click.Context) -> None:
             else:
                 console.print(_("Cache directory does not exist yet"))
 
+            # Upstream responses kept between calls (memory by default; a CLI
+            # process starts empty, so this mostly says which backend is on)
+            stats = client.cache.stats()
+            console.print(
+                _("Response cache: {backend}, {entries} entries, {size} MB").format(
+                    backend=stats.backend,
+                    entries=stats.entries,
+                    size=f"{stats.bytes / 1024 / 1024:.1f}",
+                )
+            )
+
             console.print()
             header = _("API Settings")
             console.print(f"{header}", style="bold cyan")

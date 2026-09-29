@@ -101,6 +101,7 @@ Cache Directory: ~/.cadastral_api_cache
 Cache Size: 0.0 MB
 Cached Municipalities: 1
   • 334979 (0.7 KB)
+Response cache: memory, 0 entries, 0.0 MB
 
 API Settings
 ============

@@ -54,7 +54,7 @@ class _FakeClient:
             for item in json.loads((FIXTURES / "offices.json").read_text(encoding="utf-8"))
         ]
 
-    def get_parcel_info(self, parcel_id):
+    def get_parcel_info(self, parcel_id, **kwargs):
         return self.parcel
 
     def find_municipality(self, search_term=None, office_id=None, department_id=None):

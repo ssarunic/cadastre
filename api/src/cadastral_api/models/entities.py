@@ -389,8 +389,13 @@ class PossessionSheet(SourceModel):
         alias="possessionSheetId",
         description="Unique possession sheet identifier (absent on the by-number stub)",
     )
-    possession_sheet_number: str = Field(
-        alias="possessionSheetNumber", description="Sheet reference number"
+    # A sheet nested in a unit's sheet A can come with no number at all
+    # (unit 11216 of main book 221290 lists a parcel whose sheet has
+    # ``possessionSheetNumber: null``); the record must not be rejected for it.
+    possession_sheet_number: str | None = Field(
+        default=None,
+        alias="possessionSheetNumber",
+        description="Sheet reference number (None when the server sends none)",
     )
     # On a harmonized sheet the two sheet endpoints return a stub: no
     # possessors, and the id of the land-registry unit the possession follows.

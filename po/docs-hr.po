@@ -116,7 +116,7 @@ msgstr "Alat potvrđuje što je uklonio i koliko je prostora oslobodio."
 #: commands/cache-list.md:51 commands/download-gis.md:56
 #: commands/get-geometry.md:74 commands/get-lr-unit.md:100
 #: commands/get-parcel.md:102 commands/get-possession-sheet.md:79
-#: commands/get-zoning.md:90 commands/info.md:65
+#: commands/get-zoning.md:90 commands/info.md:68
 #: commands/list-books-of-dc.md:53 commands/list-main-books.md:53
 #: commands/list-municipalities.md:66 commands/list-offices.md:89
 #: commands/search-municipality.md:52 commands/search-possession-sheet.md:55
@@ -142,7 +142,7 @@ msgstr "Da biste uklonili sve, umjesto naziva općine upotrijebite `--sve`:"
 #: commands/cache-list.md:59 commands/download-gis.md:71
 #: commands/get-geometry.md:98 commands/get-lr-unit.md:366
 #: commands/get-parcel.md:213 commands/get-possession-sheet.md:113
-#: commands/get-zoning.md:122 commands/info.md:73
+#: commands/get-zoning.md:122 commands/info.md:76
 #: commands/list-books-of-dc.md:74 commands/list-main-books.md:78
 #: commands/list-municipalities.md:90 commands/list-offices.md:104
 #: commands/search-municipality.md:75 commands/search-possession-sheet.md:72
@@ -166,7 +166,7 @@ msgstr "Ako ne navedete ni općinu ni `--sve`, vidjet ćete ovo:"
 #: commands/cache-list.md:64 commands/download-gis.md:90
 #: commands/get-geometry.md:117 commands/get-lr-unit.md:382
 #: commands/get-parcel.md:265 commands/get-possession-sheet.md:128
-#: commands/get-zoning.md:141 commands/info.md:80
+#: commands/get-zoning.md:141 commands/info.md:83
 #: commands/list-books-of-dc.md:87 commands/list-main-books.md:92
 #: commands/list-municipalities.md:103 commands/list-offices.md:110
 #: commands/search-municipality.md:89 commands/search-possession-sheet.md:85
@@ -188,7 +188,7 @@ msgstr "[preuzmi-gis](download-gis.md) ponovno preuzima općinu."
 #: commands/cache-list.md:71 commands/download-gis.md:96
 #: commands/get-geometry.md:123 commands/get-lr-unit.md:390
 #: commands/get-parcel.md:272 commands/get-possession-sheet.md:135
-#: commands/get-zoning.md:147 commands/info.md:86
+#: commands/get-zoning.md:147 commands/info.md:89
 #: commands/list-books-of-dc.md:93 commands/list-main-books.md:99
 #: commands/list-municipalities.md:109 commands/list-offices.md:116
 #: commands/search-municipality.md:96 commands/search-possession-sheet.md:92
@@ -1495,25 +1495,29 @@ msgstr ""
 "Naredba nije uspjela i želite vidjeti je li alat usmjeren na pravi "
 "poslužitelj."
 
-#: commands/info.md:59
+#: commands/info.md:60
 msgid ""
 "**API Base** is the address of the server the tool talks to. For practice it "
 "is the address of the practice server on your own computer. **Cache "
 "Information** lists the municipalities whose boundary data is stored on your "
-"computer. **API Settings** shows how long the tool waits between requests and"
-" how long it waits for an answer."
+"computer, and the **Response cache** line says whether answers from the "
+"server are kept in memory while a command runs (they are, unless it says "
+"`off`). **API Settings** shows how long the tool waits between requests and "
+"how long it waits for an answer."
 msgstr ""
 "**API osnova** je adresa poslužitelja s kojim alat razgovara. Za vježbu to je"
 " adresa probnog poslužitelja na vašem računalu. **Informacije o "
 "predmemoriji** ispisuje općine čiji su podaci o granicama pohranjeni na vašem"
-" računalu; alat tu pohranu naziva predmemorijom. **API postavke** pokazuje "
-"koliko alat čeka između zahtjeva i koliko dugo čeka odgovor."
+" računalu; alat tu pohranu naziva predmemorijom. Redak **Predmemorija "
+"odgovora** kaže čuvaju li se odgovori poslužitelja u memoriji dok naredba "
+"radi (čuvaju se, osim ako piše `off`). **API postavke** pokazuje koliko alat "
+"čeka između zahtjeva i koliko dugo čeka odgovor."
 
-#: commands/info.md:67
+#: commands/info.md:70
 msgid "None. If the tool prints this screen, it is installed correctly."
 msgstr "Nema ih. Ako alat ispiše ovaj zaslon, ispravno je instaliran."
 
-#: commands/info.md:75
+#: commands/info.md:78
 msgid ""
 "If Terminal says the command is not found, the tool is not installed for your"
 " user account, or Terminal was opened before the installation finished. Close"
@@ -1525,14 +1529,14 @@ msgstr ""
 "završila. Zatvorite Terminal, otvorite ga ponovno i pokušajte opet. Ako i "
 "dalje ne radi, obratite se osobi koja je instalirala alat."
 
-#: commands/info.md:82
+#: commands/info.md:85
 msgid ""
 "[cache-list](cache-list.md) shows the stored boundary data in more detail."
 msgstr ""
 "[predmemorija popis](cache-list.md) detaljnije prikazuje pohranjene podatke o"
 " granicama."
 
-#: commands/info.md:83
+#: commands/info.md:86
 msgid "[Start here](../start-here.md) is the tutorial."
 msgstr "[Počnite ovdje](../start-here.md) je vodič za početak."
 
@@ -2734,11 +2738,11 @@ msgstr "Otvorite novi terminal kao korisnik i pokrenite:"
 msgid "You should see this:"
 msgstr "Trebali biste vidjeti ovo:"
 
-#: install.md:115
+#: install.md:116
 msgid "Hand-over checklist"
 msgstr "Popis za primopredaju"
 
-#: install.md:117
+#: install.md:118
 msgid ""
 "The practice server starts on its own, or the user knows the two lines that "
 "start it."
@@ -2746,23 +2750,23 @@ msgstr ""
 "Probni poslužitelj pokreće se sam, ili korisnik zna dva retka kojima ga "
 "pokreće."
 
-#: install.md:118
+#: install.md:119
 msgid ""
 "`cadastral info` prints the screen above in a fresh terminal opened by the "
 "user."
 msgstr ""
 "`uz info` ispisuje gornji zaslon u novom terminalu koji je korisnik otvorio."
 
-#: install.md:119
+#: install.md:120
 msgid "`CADASTRAL_LANG` is set in the user's profile."
 msgstr "`CADASTRAL_LANG` je postavljen u korisnikovu profilu."
 
-#: install.md:120
+#: install.md:121
 msgid "The user has the link to [Start here](start-here.md) in their language."
 msgstr ""
 "Korisnik ima poveznicu na [Počnite ovdje](start-here.md) na svom jeziku."
 
-#: install.md:121
+#: install.md:122
 msgid ""
 "The user has your contact for when Terminal says the command is not found."
 msgstr ""

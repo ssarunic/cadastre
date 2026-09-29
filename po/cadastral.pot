@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-15 19:49+0100\n"
+"POT-Creation-Date: 2026-09-16 16:12+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -1599,31 +1599,36 @@ msgstr ""
 msgid "Cache directory does not exist yet"
 msgstr ""
 
-#: cli/src/cadastral_cli/commands/discovery.py:404
+#: cli/src/cadastral_cli/commands/discovery.py:407
+#, python-brace-format
+msgid "Response cache: {backend}, {entries} entries, {size} MB"
+msgstr ""
+
+#: cli/src/cadastral_cli/commands/discovery.py:415
 msgid "API Settings"
 msgstr ""
 
-#: cli/src/cadastral_cli/commands/discovery.py:407
+#: cli/src/cadastral_cli/commands/discovery.py:418
 #, python-brace-format
 msgid "Rate Limit: {rate_limit} seconds between requests"
 msgstr ""
 
-#: cli/src/cadastral_cli/commands/discovery.py:410
+#: cli/src/cadastral_cli/commands/discovery.py:421
 #, python-brace-format
 msgid "Timeout: {timeout} seconds"
 msgstr ""
 
-#: cli/src/cadastral_cli/commands/discovery.py:413
+#: cli/src/cadastral_cli/commands/discovery.py:424
 #, python-brace-format
 msgid "Unknown server fields: {policy}"
 msgstr ""
 
-#: cli/src/cadastral_cli/commands/discovery.py:418
+#: cli/src/cadastral_cli/commands/discovery.py:429
 #: cli/src/cadastral_cli/commands/cache.py:232
 msgid "To clear cache: cadastral cache clear --all"
 msgstr ""
 
-#: cli/src/cadastral_cli/commands/discovery.py:421
+#: cli/src/cadastral_cli/commands/discovery.py:432
 #, python-brace-format
 msgid "Error getting system info: {error}"
 msgstr ""

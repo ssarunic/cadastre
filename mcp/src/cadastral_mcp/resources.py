@@ -1,5 +1,6 @@
 """MCP Resources - Read-only contextual data that AI can auto-fetch."""
 
+import asyncio
 import logging
 from typing import Any
 
@@ -38,7 +39,7 @@ class CadastralResources:
         """
         try:
             logger.info(f"Fetching parcel resource: {parcel_id}")
-            parcel = self.client.get_parcel_info(parcel_id)
+            parcel = await asyncio.to_thread(self.client.get_parcel_info, parcel_id)
             return parcel.model_dump(mode="json")
         except CadastralAPIError as e:
             logger.error(f"Failed to fetch parcel {parcel_id}: {e}", exc_info=True)
@@ -63,7 +64,7 @@ class CadastralResources:
             logger.info(f"Fetching municipality resource: {code}")
             # Search by code; the server also matches the code as a substring
             # of the name field, so pick the record whose code is exactly this.
-            municipalities = self.client.find_municipality(code)
+            municipalities = await asyncio.to_thread(self.client.find_municipality, code)
             for muni in municipalities:
                 if muni.municipality_reg_num == code:
                     return muni.model_dump(mode="json")
@@ -90,7 +91,7 @@ class CadastralResources:
         """
         try:
             logger.info(f"Fetching cadastral office resource: {code}")
-            offices = self.client.list_cadastral_offices()
+            offices = await asyncio.to_thread(self.client.list_cadastral_offices)
 
             # Find office by code
             for office in offices:
