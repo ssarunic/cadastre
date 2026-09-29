@@ -85,31 +85,32 @@ def test_missing_sheet_is_a_clear_error() -> None:
         _run(CadastralTools(_FakeClient()).get_possession_sheet(" ", "SAVAR"))
 
 
-class _HarmonizedClient(_FakeClient):
-    def __init__(self) -> None:
-        super().__init__(parcels=0)
-        self.sheet = PossessionSheet.model_validate(
-            {"possessionSheetNumber": "657", "cadMunicipalityId": 2387, "lrUnitId": 13122441,
-             "possessors": []}
-        )
-        record = {
-            "parcelId": 6564817, "parcelNumber": "103/2", "cadMunicipalityRegNum": "334979",
-            "area": "1200", "isHarmonized": True,
-            "parcelParts": [{"name": "MASLINJAK", "area": "1200", "building": False}],
-            "lrUnit": {"lrUnitId": 13122441, "lrUnitNumber": "657", "mainBookId": 21277,
-                       "status": "A", "verificated": True, "condominiums": False,
-                       "ownershipSheetB": {"lrUnitShares": [
-                           {"lrUnitShareId": 1, "orderNumber": "1", "description": "1/2",
-                            "status": 0, "lrOwners": [{"name": "Vlasnik 1", "taxNumber": "1"}]},
-                           {"lrUnitShareId": 2, "orderNumber": "2", "description": "1/2",
-                            "status": 0, "lrOwners": [{"name": "Vlasnik 2", "taxNumber": None}]},
-                       ], "lrEntries": []}},
-        }
-        self.parcels = [SearchedParcel.model_validate(record)]
+def _harmonized_client() -> _FakeClient:
+    """A sheet without possessors whose one parcel is harmonized: owners come inline."""
+    client = _FakeClient(parcels=0)
+    client.sheet = PossessionSheet.model_validate(
+        {"possessionSheetNumber": "657", "cadMunicipalityId": 2387, "lrUnitId": 13122441,
+         "possessors": []}
+    )
+    record = {
+        "parcelId": 6564817, "parcelNumber": "103/2", "cadMunicipalityRegNum": "334979",
+        "area": "1200", "isHarmonized": True,
+        "parcelParts": [{"name": "MASLINJAK", "area": "1200", "building": False}],
+        "lrUnit": {"lrUnitId": 13122441, "lrUnitNumber": "657", "mainBookId": 21277,
+                   "status": "A", "verificated": True, "condominiums": False,
+                   "ownershipSheetB": {"lrUnitShares": [
+                       {"lrUnitShareId": 1, "orderNumber": "1", "description": "1/2",
+                        "status": 0, "lrOwners": [{"name": "Vlasnik 1", "taxNumber": "1"}]},
+                       {"lrUnitShareId": 2, "orderNumber": "2", "description": "1/2",
+                        "status": 0, "lrOwners": [{"name": "Vlasnik 2", "taxNumber": None}]},
+                   ], "lrEntries": []}},
+    }
+    client.parcels = [SearchedParcel.model_validate(record)]
+    return client
 
 
 def test_harmonized_sheet_reports_the_owners_instead_of_possessors() -> None:
-    res = _run(CadastralTools(_HarmonizedClient()).get_possession_sheet("657", "SAVAR"))
+    res = _run(CadastralTools(_harmonized_client()).get_possession_sheet("657", "SAVAR"))
     assert res["possessors_in_land_registry"] is True
     assert res["sheet"]["lr_unit_id"] == 13122441
     assert res["sheet"]["is_condominium"] is None
@@ -120,7 +121,7 @@ def test_harmonized_sheet_reports_the_owners_instead_of_possessors() -> None:
     assert res["total_owners"] == 2 and res["distinct_owners"] == 2
     assert "harmonized" in res["owners_note"]
     assert res["parcels"][0]["inline_owners"] == 2
-    tools = CadastralTools(_HarmonizedClient())
+    tools = CadastralTools(_harmonized_client())
     filtered = _run(tools.get_possession_sheet("657", "SAVAR", possessor_name="vlasnik 2"))
     assert [o["name"] for o in filtered["owners"]] == ["Vlasnik 2"]
     assert filtered["matching_owners"] == 1 and filtered["filter_applied_to"] == "owners"
