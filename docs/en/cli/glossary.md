@@ -3,7 +3,7 @@
 
 > **Practice data only.** This tool is a demonstration. It works with the practice server that comes with it. Before connecting it to any other server, including the official Croatian cadastre and land registry, verify that you have the rights to use that server and its data; you do so at your own risk. Nothing shown on this page is real property data.
 >
-> Generated from `cadastral 0.3.0` by `scripts/build_docs.py`. Text between the generated markers is rewritten on every build.
+> Generated from `cadastral 0.4.0` by `scripts/build_docs.py`. Text between the generated markers is rewritten on every build.
 <!-- END GENERATED: banner -->
 
 # Glossary

@@ -50,7 +50,7 @@ class MCPConfig:
 
     # MCP Server Configuration
     server_name: str = "cadastral-mcp-server"
-    server_version: str = "0.3.0"
+    server_version: str = "0.4.0"
 
     # HTTP transport (--transport http): interface and port to listen on.
     # Without MCP_HTTP_KEYS the server is open, so it only listens on loopback.

@@ -50,7 +50,7 @@ from .models import (
 from .planning import PlanningWFSClient
 from .utils import display_parcel_number, normalize_parcel_number
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     # Client
