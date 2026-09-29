@@ -7,6 +7,21 @@ from pathlib import Path
 from cadastral_api import CadastralAPIClient
 from cadastral_api.gis import GISCache
 
+#: Bytes a tool result may take on the wire unless ``MCP_RESULT_BUDGET_BYTES``
+#: says otherwise: under the 1 MB per-result limit of the MCP clients seen so
+#: far, with room for the JSON-RPC envelope.
+DEFAULT_RESULT_BUDGET_BYTES = 800_000
+
+
+def _result_budget_from_env() -> int:
+    """``MCP_RESULT_BUDGET_BYTES`` as a positive int, the default when unset or unusable."""
+    raw = os.getenv("MCP_RESULT_BUDGET_BYTES", "").strip()
+    try:
+        value = int(raw) if raw else DEFAULT_RESULT_BUDGET_BYTES
+    except ValueError:
+        return DEFAULT_RESULT_BUDGET_BYTES
+    return value if value > 0 else DEFAULT_RESULT_BUDGET_BYTES
+
 
 @dataclass
 class MCPConfig:
@@ -25,6 +40,13 @@ class MCPConfig:
     cache_dir: Path = Path(os.getenv("CADASTRAL_CACHE_DIR", str(GISCache.DEFAULT_CACHE_DIR)))
     # Response cache backend (memory | off); None leaves the SDK to read CADASTRAL_CACHE
     cache: str | None = os.getenv("CADASTRAL_CACHE")
+
+    # Tool results: the bytes one result may take on the wire, and whether the
+    # structured copy (structuredContent) is sent next to the text block.
+    result_budget_bytes: int = _result_budget_from_env()
+    structured_output: bool = os.getenv("MCP_STRUCTURED_OUTPUT", "on").strip().lower() not in (
+        "off", "0", "false", "no"
+    )
 
     # MCP Server Configuration
     server_name: str = "cadastral-mcp-server"

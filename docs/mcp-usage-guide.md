@@ -109,9 +109,12 @@ a storage room is two records, often with two addresses, and the records are
 kept as the cadastre holds them), `possessors_truncated` and a `page` block
 (`offset`, `limit`, `total`,
 `returned`, `truncated`, `next_offset`); when `truncated` is true, call again
-with `offset=next_offset` for the rest. An entry too large to return in one
-response becomes that parcel's `error`, naming a smaller `limit` and the
-`source` values that omit the possessors altogether.
+with `offset=next_offset` for the rest. A window too large to return in one
+response is cut to what fits (see [Result size](#result-size)); `page.limit`
+is then the limit applied and `page.requested_limit` the one asked for. Only
+an entry that does not fit with a single possessor record becomes that
+parcel's `error`, naming the filters and the `source` values that omit the
+possessors altogether.
 
 To find one person or one unit on a large sheet, filter instead of paging:
 `possessor_name` keeps the possessors whose name contains every word of the
@@ -218,11 +221,12 @@ for the rest. `owners_limit` is an older synonym of `limit`. In `shares` and
 `full` a share is a page item whether or not it has owners (a share may hold
 only annotations), and the shares outside the window are dropped whole,
 counted in `shares_omitted`; `total_owners` and `owners_truncated` report the
-owner records of the whole sheet. A response too large to return becomes that
-unit's `error`, naming the sheet at fault and the smaller options: a per-sheet
-level with a small limit is always small enough, so a unit that `full` refuses
-(a list C that alone exceeds the ceiling, for instance) can still be read
-completely, one sheet and one page at a time.
+owner records of the whole sheet. A window too large to return is cut to what
+fits (see [Result size](#result-size)). A unit that does not fit even with a
+single record in the window becomes that unit's `error`, naming the sheet at
+fault and the smaller options: a per-sheet level is always small enough, so a
+unit that `full` refuses (a list C that alone exceeds the budget, for
+instance) can still be read completely, one sheet and one page at a time.
 
 `owner_name` finds one person in a unit without paging through it: only the
 owners whose name contains every word of the text (case and diacritics
@@ -500,8 +504,10 @@ in long form, one row per person and parcel, or per parcel and blocker) or
 `"geojson"` (a `FeatureCollection` of the parcels that have an
 outline, scores in the properties, the others under `skipped`). Party types
 are inferred from names and controlled areas use cadastre areas; the
-`notes` repeat both caveats. A response too large to return says so and
-names the way out (fewer parcels, a `persons_limit`, one export at a time).
+`notes` repeat both caveats. The persons window is cut to what fits (see
+[Result size](#result-size)); a response too large to return even so says so
+and names the way out (fewer parcels, `include_blockers=false`, one export at
+a time).
 
 ### `find_parcels_in_area(municipality, bbox=None, polygon=None, center=None, radius_m=None, relation="intersects", offset=0, limit=50, include_geojson=False)`
 
@@ -752,6 +758,34 @@ take `refresh=true` to read a record again; their `page.fetched_at` says how
 old the copy is. `CADASTRAL_CACHE=off` in the client's `env` block turns the
 cache off, `CADASTRAL_CACHE_MEMORY_MB` sizes it (default 64). Nothing is
 written to disk.
+
+## Result size
+
+MCP clients drop a tool result above a size of their own (about 1 MB in
+Claude Desktop and claude.ai), and the SDK sends a result twice: as the
+text the model reads and as `structuredContent` for clients that consume
+typed output. The server therefore measures every result as it will be sent
+and keeps it under a **wire budget**, `MCP_RESULT_BUDGET_BYTES` in the
+client's `env` block (default 800,000).
+
+Every paged list (`get_parcel` possessors, `get_lr_unit` owners, shares,
+parcels and encumbrances, `get_possession_sheet`, `list_municipalities`,
+`find_parcels_in_area`, `find_parcel_neighbours`, the persons of
+`build_assembly`) obeys it the same way:
+
+- `limit=null` means **as many as fit**: the window is cut to the largest
+  prefix within budget, `page.truncated` is true and `page.next_offset` says
+  where to continue, as for an explicit limit.
+- An explicit `limit` that does not fit is cut the same way; `page.limit` is
+  the limit applied and `page.requested_limit` the one asked for, so a reduced
+  window is visible.
+- A single record that does not fit on its own (a parcel entry or a unit whose
+  weight lies outside the paged list, a zoning answer with polygons) is the
+  only case still refused, with an error naming the smaller views.
+
+`MCP_STRUCTURED_OUTPUT=off` registers the tools without the structured copy,
+which halves the payload for a client that reads only the text; the budget
+then counts the text alone.
 
 ## Reminders
 

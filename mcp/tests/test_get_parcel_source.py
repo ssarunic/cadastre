@@ -263,29 +263,61 @@ def test_window_past_the_end_is_empty_not_an_error() -> None:
     assert entry["page"]["returned"] == 0 and entry["page"]["truncated"] is False
 
 
-def test_a_parcel_too_large_to_return_is_that_parcels_error_with_a_smaller_limit() -> None:
-    tools = CadastralTools(_FakeCondominiumClient(n=400))
-    res = _run(tools.get_parcel([{"parcel_id": "1"}]))
-    entry = res["results"][0]
-    assert entry["status"] == "error"
-    assert res["failed"] == 1
-    assert "too large" in entry["error"]
-    assert "limit=" in entry["error"] and 'source="none"' in entry["error"]
-    # The way forward it names works.
-    paged = _run(tools.get_parcel([{"parcel_id": "1"}], limit=50))["results"][0]
-    assert paged["status"] == "success"
-    assert paged["page"]["returned"] == 50 and paged["page"]["total"] == 403
-    assert len(json.dumps(paged, ensure_ascii=False)) <= CadastralTools.MAX_PARCEL_RESPONSE_CHARS
-    # The suggested limit is proportional to what fits, not a quarter of the window.
-    refused = _run(tools.get_parcel([{"parcel_id": "1"}], limit=300))["results"][0]
-    assert refused["status"] == "error"
-    suggested = int(refused["error"].split("limit=")[1].split(")")[0])
-    assert 150 < suggested < 300
-    retry = _run(tools.get_parcel([{"parcel_id": "1"}], limit=suggested))["results"][0]
-    assert retry["status"] == "success"
-    # Without the possessors the parcel itself is never refused.
-    bare = _run(tools.get_parcel([{"parcel_id": "1"}], source="none"))["results"][0]
-    assert bare["status"] == "success"
+
+def test_a_possessor_window_over_the_budget_is_cut_to_what_fits() -> None:
+    client = _FakeCondominiumClient(n=400)
+    # The budget holds about fifty possessor records of this sheet.
+    fifty = _run(CadastralTools(client).get_parcel([{"parcel_id": "1"}], limit=50))
+    budget = _tools.wire_size(fifty["results"][0])
+    tools = CadastralTools(client, result_budget_bytes=budget)
+    # No limit means as many as fit, with the page block saying where to continue.
+    entry = _run(tools.get_parcel([{"parcel_id": "1"}]))["results"][0]
+    assert entry["status"] == "success"
+    page = entry["page"]
+    assert 0 < page["returned"] < 403 and page["total"] == 403
+    assert page["limit"] == page["returned"] and page["requested_limit"] is None
+    assert page["truncated"] is True and page["next_offset"] == page["returned"]
+    assert entry["possessors_truncated"] is True
+    assert _tools.wire_size(entry) <= budget
+    # An explicit limit that does not fit is reduced and reported.
+    reduced = _run(tools.get_parcel([{"parcel_id": "1"}], limit=300))["results"][0]
+    assert reduced["status"] == "success"
+    assert reduced["page"]["limit"] < 300 and reduced["page"]["requested_limit"] == 300
+    # The cut pages cover every possessor exactly once.
+    seen, offset = [], 0
+    while True:
+        entry = _run(tools.get_parcel([{"parcel_id": "1"}], offset=offset))["results"][0]
+        seen += _possessor_names(entry)
+        if not entry["page"]["truncated"]:
+            break
+        offset = entry["page"]["next_offset"]
+    assert len(seen) == 403 and len(set(seen)) == 403
+    # A budget under a single record is that parcel's error naming the way out.
+    tiny = CadastralTools(client, result_budget_bytes=3_000)
+    res = _run(tiny.get_parcel([{"parcel_id": "1"}]))
+    refused = res["results"][0]
+    assert refused["status"] == "error" and res["failed"] == 1
+    assert refused["error_type"] == "response_too_large"
+    assert "too large" in refused["error"]
+    assert "possessor_name" in refused["error"] and 'source="none"' in refused["error"]
+    # Without the possessors the parcel itself is never cut or refused.
+    bare = _run(tiny.get_parcel([{"parcel_id": "1"}], source="none"))["results"][0]
+    assert bare["status"] == "success" and "page" not in bare
+
+
+def test_several_parcels_share_the_budget() -> None:
+    client = _FakeCondominiumClient(n=400)
+    whole = _run(CadastralTools(client).get_parcel([{"parcel_id": "1"}]))["results"][0]
+    budget = _tools.wire_size(whole)  # exactly one whole entry
+    tools = CadastralTools(client, result_budget_bytes=budget)
+    alone = _run(tools.get_parcel([{"parcel_id": "1"}]))["results"][0]
+    assert alone["page"]["returned"] == 403  # fits on its own
+    res = _run(tools.get_parcel([{"parcel_id": "1"}, {"parcel_id": "1"}]))
+    first, second = res["results"]
+    assert first["status"] == "success" and second["status"] == "success"
+    # Each entry got half the budget, so both windows were cut.
+    assert first["page"]["returned"] < 403 and second["page"]["returned"] < 403
+    assert _tools.wire_size(first) <= budget // 2 and _tools.wire_size(second) <= budget // 2
 
 
 def test_bad_paging_arguments_are_refused(tools) -> None:
@@ -429,10 +461,10 @@ def test_sdk_errors_keep_their_type_and_details() -> None:
     assert res["successful"] == 1 and res["failed"] == 2
 
 
-def test_a_too_large_entry_is_response_too_large(monkeypatch) -> None:
-    tools = CadastralTools(_FakeClient())
-    monkeypatch.setattr(CadastralTools, "MAX_PARCEL_RESPONSE_CHARS", 10)  # every entry is too large
+
+def test_a_too_large_entry_is_response_too_large() -> None:
+    tools = CadastralTools(_FakeClient(), result_budget_bytes=10)  # every entry is too large
     entry = _run(tools.get_parcel([{"parcel_id": "6564741"}]))["results"][0]
     assert entry["status"] == "error"
     assert entry["error_type"] == "response_too_large"
-    assert "limit=" in entry["error"]
+    assert 'source="none"' in entry["error"]

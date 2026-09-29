@@ -1,10 +1,11 @@
 """MCP Tools - AI-invoked actions that perform operations."""
 
 import asyncio
-import json
 import logging
+from collections.abc import Callable
 from typing import Any
 
+import pydantic_core
 from cadastral_api import CadastralAPIClient, GMLParser
 from cadastral_api.analysis import (
     AssemblyInput,
@@ -55,6 +56,87 @@ class ResponseTooLargeError(ValueError):
     """A shaped entry exceeds the response ceiling; the message names the smaller options."""
 
 
+
+# --- Wire budget of a tool result (response-cache specification, section 11) ---
+# The MCP SDK sends a dict result twice: pretty-printed as the text block the
+# model reads and, when structured output is on, compactly as
+# ``structuredContent``. A client such as Claude Desktop drops the whole
+# result above about 1 MB on the wire, so what is measured is the serialised
+# result as it will be sent, not the compact dict the tools build.
+
+#: Bytes a tool result may take on the wire, unless ``MCP_RESULT_BUDGET_BYTES``
+#: says otherwise. Under the 1 MB per-result limit of the MCP clients seen so
+#: far, with room for the JSON-RPC envelope.
+DEFAULT_RESULT_BUDGET_BYTES = 800_000
+
+def wire_size(payload: Any, *, structured: bool = True) -> int:
+    """Bytes the serialised result of ``payload`` takes on the wire.
+
+    The pretty text copy the SDK builds from a dict result, plus the compact
+    structured copy when ``structured`` is on. Values the SDK serialises with
+    ``fallback=str`` are counted the same way.
+    """
+    size = len(pydantic_core.to_json(payload, fallback=str, indent=2))
+    if structured:
+        size += len(pydantic_core.to_json(payload, fallback=str))
+    return size
+
+
+class DoesNotFitError(Exception):
+    """The smallest window still exceeds the budget: a single record does not fit."""
+
+    def __init__(self, result: dict[str, Any], size: int, budget: int) -> None:
+        super().__init__(f"{size:,} bytes on the wire, budget {budget:,}")
+        self.result = result
+        self.size = size
+        self.budget = budget
+
+
+def fit_window(
+    build: Callable[[int | None], dict[str, Any]],
+    limit: int | None,
+    *,
+    budget: int,
+    structured: bool = True,
+    page_key: str = "page",
+) -> dict[str, Any]:
+    """Build a paged result and shrink its window until it fits the budget.
+
+    ``build(limit)`` returns the result for a window of at most ``limit``
+    records (all of them past the offset when None), with its paging block
+    under ``page_key`` (``returned`` says how many records came back). When
+    the result is over budget the window is cut in proportion, with a tenth
+    to spare, and built again; records are near uniform, so one cut and at
+    most one retry suffice. The page block of a cut window carries
+    ``requested_limit`` (what the caller asked for, None for all) next to the
+    ``limit`` actually applied, and ``truncated`` / ``next_offset`` say where
+    to continue, as for an explicit limit.
+
+    Raises:
+        DoesNotFitError: the window is down to one record and still over budget.
+    """
+    result = build(limit)
+    size = wire_size(result, structured=structured)
+    applied = limit
+    for _ in range(2):
+        if size <= budget:
+            break
+        returned = int((result.get(page_key) or {}).get("returned") or 0)
+        if returned <= 1:
+            break
+        fits = max(1, int(returned * budget / size * 0.9))
+        if fits >= returned:
+            fits = returned - 1
+        applied = fits
+        result = build(applied)
+        size = wire_size(result, structured=structured)
+    if size > budget:
+        raise DoesNotFitError(result, size, budget)
+    if applied != limit:
+        page = result.get(page_key)
+        if isinstance(page, dict):
+            page["requested_limit"] = limit
+    return result
 def error_kind(exc: BaseException) -> tuple[str, dict[str, Any]]:
     """The machine-readable kind of a failure, and its details.
 
@@ -210,9 +292,49 @@ class CadastralTools:
     actions like searching, fetching data, or resolving identifiers.
     """
 
-    def __init__(self, client: CadastralAPIClient) -> None:
-        """Initialize tools with a cadastral API client."""
+    def __init__(
+        self,
+        client: CadastralAPIClient,
+        *,
+        result_budget_bytes: int = DEFAULT_RESULT_BUDGET_BYTES,
+        structured_output: bool = True,
+    ) -> None:
+        """Tools over a cadastral API client.
+
+        ``result_budget_bytes`` is what one tool result may take on the wire
+        and ``structured_output`` whether the SDK sends the structured copy
+        next to the text (both counted; see ``budget.wire_size``).
+        """
         self.client = client
+        self.result_budget_bytes = result_budget_bytes
+        self.structured_output = structured_output
+
+    def _fit(
+        self,
+        build: Callable[[int | None], dict[str, Any]],
+        limit: int | None,
+        *,
+        page_key: str = "page",
+        share_of: int = 1,
+    ) -> dict[str, Any]:
+        """``build(limit)`` cut to the wire budget (``budget.fit_window``).
+
+        ``share_of`` is how many entries of one response divide the budget
+        between them, so a call for several parcels or units stays within it
+        as a whole. An entry is measured on its own; the indentation the
+        envelope adds around it is not counted, which the default budget's
+        margin under the clients' 1 MB covers.
+        """
+        return fit_window(
+            build,
+            limit,
+            budget=max(1, self.result_budget_bytes // max(1, share_of)),
+            structured=self.structured_output,
+            page_key=page_key,
+        )
+
+    def _wire_size(self, payload: Any) -> int:
+        return wire_size(payload, structured=self.structured_output)
 
     async def search_parcel(
         self, parcel_number: str, municipality: str, max_matches: int = 0
@@ -537,7 +659,13 @@ class CadastralTools:
             try:
                 results.append(
                     await self._get_one_parcel(
-                        ref, source, offset, limit, possessor_filter, refresh=refresh
+                        ref,
+                        source,
+                        offset,
+                        limit,
+                        possessor_filter,
+                        refresh=refresh,
+                        share_of=len(parcels),
                     )
                 )
             except Exception as e:  # noqa: BLE001 - recorded per item on purpose
@@ -566,53 +694,72 @@ class CadastralTools:
         possessor_filter: dict[str, Any] | None = None,
         *,
         refresh: bool = False,
+        share_of: int = 1,
     ) -> dict[str, Any]:
-        """The ``results`` entry of one parcel reference (raises on failure)."""
+        """The ``results`` entry of one parcel reference (raises on failure).
+
+        ``share_of`` is the number of parcels in the call, which divide the
+        wire budget between them.
+        """
         parcel, geometry, search_result = await self._load_parcel(ref, refresh=refresh)
-        result_data = parcel.model_dump(mode="json")
-        # Retrieval provenance describes the entry, so it sits next to
-        # ``register`` rather than inside the record it is about.
-        provenance = result_data.pop("provenance", None)
+        def build(window_limit: int | None) -> dict[str, Any]:
+            """The entry with at most ``window_limit`` possessor records in its window."""
+            result_data = parcel.model_dump(mode="json")
+            # Retrieval provenance describes the entry, so it sits next to
+            # ``register`` rather than inside the record it is about.
+            provenance = result_data.pop("provenance", None)
 
-        # A parcel whose unit is reachable only through parcel links has a
-        # null ``lr_unit``; put the resolved unit there, as promised, and let
-        # ``lr_reference_shape`` ("linked") say where it came from. The links
-        # themselves stay in the dump.
-        if result_data.get("lr_unit") is None:
-            resolved = parcel.resolved_lr_unit()
-            if resolved is not None:
-                result_data["lr_unit"] = resolved.model_dump(mode="json")
+            # A parcel whose unit is reachable only through parcel links has a
+            # null ``lr_unit``; put the resolved unit there, as promised, and let
+            # ``lr_reference_shape`` ("linked") say where it came from. The links
+            # themselves stay in the dump.
+            if result_data.get("lr_unit") is None:
+                resolved = parcel.resolved_lr_unit()
+                if resolved is not None:
+                    result_data["lr_unit"] = resolved.model_dump(mode="json")
 
-        # Possession sheets are CADASTRE data; only include them when
-        # cadastre possessors were explicitly requested.
-        page: dict[str, Any] | None = None
+            # Possession sheets are CADASTRE data; only include them when
+            # cadastre possessors were explicitly requested.
+            page: dict[str, Any] | None = None
+            if source != "cadastre":
+                result_data.pop("possession_sheets", None)
+            else:
+                page = self._window_possessors(
+                    result_data, offset, window_limit, possessor_filter
+                )
+                fetched_at = (provenance or {}).get("retrieved_at")
+                if fetched_at:
+                    page["fetched_at"] = fetched_at
+            if source == "land_registry":
+                result_data["land_registry_hint"] = self._lr_unit_hint(parcel)
+
+            entry: dict[str, Any] = {
+                "status": "success",
+                "ref": ref.model_dump(exclude_none=True),
+                "register": source,
+                "provenance": provenance,
+                "cadastre_lr_harmonized": parcel.is_harmonized,
+                "data": result_data,
+            }
+            if page is not None:
+                entry["total_possessors"] = parcel.total_possessors
+                entry["distinct_possessors"] = self._distinct_possessors(parcel)
+                if possessor_filter:
+                    entry["possessor_filter"] = possessor_filter
+                    entry["matching_possessors"] = page["total"]
+                entry["possessors_truncated"] = page["truncated"]
+                entry["page"] = page
+            return entry
+
         if source != "cadastre":
-            result_data.pop("possession_sheets", None)
+            entry = build(limit)
         else:
-            page = self._window_possessors(result_data, offset, limit, possessor_filter)
-            fetched_at = (provenance or {}).get("retrieved_at")
-            if fetched_at:
-                page["fetched_at"] = fetched_at
-        if source == "land_registry":
-            result_data["land_registry_hint"] = self._lr_unit_hint(parcel)
-
-        entry: dict[str, Any] = {
-            "status": "success",
-            "ref": ref.model_dump(exclude_none=True),
-            "register": source,
-            "provenance": provenance,
-            "cadastre_lr_harmonized": parcel.is_harmonized,
-            "data": result_data,
-        }
-        if page is not None:
-            entry["total_possessors"] = parcel.total_possessors
-            entry["distinct_possessors"] = self._distinct_possessors(parcel)
-            if possessor_filter:
-                entry["possessor_filter"] = possessor_filter
-                entry["matching_possessors"] = page["total"]
-            entry["possessors_truncated"] = page["truncated"]
-            entry["page"] = page
-            self._check_parcel_size(entry, parcel, page)
+            try:
+                entry = self._fit(build, limit, share_of=share_of)
+            except DoesNotFitError as e:
+                raise ResponseTooLargeError(
+                    self._parcel_too_large(e.result, parcel, e.size)
+                ) from None
         # A fallback match is not the parcel that was asked for; carry the
         # warning out of search_parcel rather than losing it here.
         if search_result is not None and not search_result["exact_match"]:
@@ -793,34 +940,22 @@ class CadastralTools:
             for possessor in sheet.possessors
         )
 
-    @classmethod
-    def _check_parcel_size(
-        cls, entry: dict[str, Any], parcel: Any, page: dict[str, Any]
-    ) -> None:
-        """Refuse a parcel entry too large to be read, with a way forward.
+    @staticmethod
+    def _parcel_too_large(entry: dict[str, Any], parcel: Any, size: int) -> str:
+        """Why a parcel entry is refused: a single record of it exceeds the wire budget.
 
-        A parcel under a large condominium carries hundreds of possessors on
-        its possession sheet; returned whole it overruns the caller's
-        response limit and is lost. The ceiling and the message follow the
-        land-registry levels (``_check_size``).
+        A window of possessors is cut to what fits before this is reached
+        (``_fit``), so what remains is an entry that does not fit even with one
+        possessor record, and the way forward is a view without them.
         """
-        size = len(json.dumps(entry, ensure_ascii=False))
-        if size <= cls.MAX_PARCEL_RESPONSE_CHARS:
-            return
-        returned = page.get("returned") or 0
-        # Possessor records are uniform, so the size scales with the window:
-        # suggest the largest window that fits, with a tenth to spare.
-        fits = int(returned * cls.MAX_PARCEL_RESPONSE_CHARS / size * 0.9) if returned else 10
-        smaller = max(1, fits)
-        raise ResponseTooLargeError(
-            f"The cadastre record of parcel {parcel.parcel_number} is {size:,} "
-            f"characters ({returned} of {page['total']} possessor records in this "
-            f"window), too large to return in one response. Pass a smaller limit "
-            f"(e.g. limit={smaller}) and page through the possessors with offset "
-            f"(the page block says where to continue), possessor_name or "
-            f"condominium_unit to pick the records you need, or source=\"none\" "
-            f"for the parcel without its possessors (source=\"land_registry\" for "
-            f"the land-registry reference instead)."
+        page = entry.get("page") or {}
+        return (
+            f"The cadastre record of parcel {parcel.parcel_number} is {size:,} bytes on the "
+            f"wire with {page.get('returned', 0)} of {page.get('total', 0)} possessor records "
+            f"in this window, too large to return in one response. Use possessor_name or "
+            f"condominium_unit to pick the records you need, or source=\"none\" for the "
+            f"parcel without its possessors (source=\"land_registry\" for the land-registry "
+            f"reference instead)."
         )
 
     @staticmethod
@@ -917,12 +1052,22 @@ class CadastralTools:
                 office_id=office_id,
                 department_id=department_id,
             )
-            window = self._window(municipalities, offset, limit)
-            return {
-                "municipalities": [self._municipality_record(m) for m in window],
-                "total": len(municipalities),
-                "page": self._page(offset, limit, len(municipalities), len(window)),
-            }
+
+            def build(window_limit: int | None) -> dict[str, Any]:
+                window = self._window(municipalities, offset, window_limit)
+                return {
+                    "municipalities": [self._municipality_record(m) for m in window],
+                    "total": len(municipalities),
+                    "page": self._page(offset, window_limit, len(municipalities), len(window)),
+                }
+
+            try:
+                return self._fit(build, limit)
+            except DoesNotFitError as e:
+                raise ResponseTooLargeError(
+                    f"One municipality record alone is {e.size:,} bytes on the wire, over "
+                    f"the result budget; raise MCP_RESULT_BUDGET_BYTES."
+                ) from None
         except CadastralAPIError as e:
             logger.error(f"Failed to list municipalities: {e}", exc_info=True)
             raise ValueError("Could not list municipalities.") from e
@@ -1055,6 +1200,18 @@ class CadastralTools:
                 "made under the 2024 Pravilnik T1 is tourism inside a settlement, T2 a "
                 "detached zone with accommodation and T3 one without."
             )
+            size = self._wire_size(data)
+            if size > self.result_budget_bytes:
+                polygons = (
+                    " Call again with include_geometry=false: the zone polygons are what "
+                    "makes it large."
+                    if include_geometry
+                    else ""
+                )
+                raise ResponseTooLargeError(
+                    f"The zoning answer for parcel {parcel_number} is {size:,} bytes on the "
+                    f"wire, too large to return in one response.{polygons}"
+                )
             return data
         except CadastralAPIError as e:
             logger.error(f"Failed to fetch zoning for {parcel_number}: {e}", exc_info=True)
@@ -1223,21 +1380,6 @@ class CadastralTools:
         window = cls._window(rows, offset, limit)
         return window, total, len(rows), offset + len(window) < len(rows)
 
-    #: Characters of JSON a full dump may reach before it is refused. A large
-    #: condominium runs to hundreds of shares, each with its own registration
-    #: entry, and overruns an agent's context long before it is read; refusing
-    #: with a way forward beats returning something unusable. The ceiling is
-    #: well under a typical MCP client's per-response limit, since a response
-    #: the client truncates is worse than one it never asked for.
-    MAX_FULL_RESPONSE_CHARS = 50_000
-
-    #: The same ceiling for one parcel's cadastre entry. Possessor records are
-    #: flat and uniform (a condominium's sheet is thousands of them at a few
-    #: hundred characters each, no nested entries), so the cost of a low
-    #: ceiling is paid in calls: at 50,000 a building of 3,000 possessors is
-    #: 25 pages. 100,000 halves that and is still an order of magnitude under
-    #: the per-response limit of the MCP clients seen so far.
-    MAX_PARCEL_RESPONSE_CHARS = 100_000
 
     @staticmethod
     def _sub_shares(share: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1450,7 +1592,6 @@ class CadastralTools:
             result["sale_blockers"] = brief
             result["owner_flags_summary"] = flags_summary
             result.update(condo_fields)
-            cls._check_size(result, lr_unit, detail, limit)
             return result
 
         if detail == "parcels":
@@ -1473,7 +1614,6 @@ class CadastralTools:
                 "sale_blockers": brief,
                 **condo_fields,
             }
-            cls._check_size(result, lr_unit, detail, limit)
             return result
 
         if detail == "encumbrances":
@@ -1488,7 +1628,6 @@ class CadastralTools:
                 "sale_blockers": blockers,
                 **condo_fields,
             }
-            cls._check_size(result, lr_unit, detail, limit)
             return result
 
         # detail == "ownership". Each owner row carries ``entry`` (the
@@ -1518,7 +1657,6 @@ class CadastralTools:
             "sale_blockers": blockers,
             "owner_flags_summary": flags_summary,
         })
-        cls._check_size(result, lr_unit, detail, limit)
         return result
 
     @staticmethod
@@ -1537,22 +1675,16 @@ class CadastralTools:
         }
 
     @classmethod
-    def _check_size(
-        cls, result: dict[str, Any], lr_unit: Any, detail: str, limit: int | None
-    ) -> None:
-        """Refuse a response that is too large to be read, with a way forward.
+    def _unit_too_large(cls, result: dict[str, Any], lr_unit: Any, detail: str, size: int) -> str:
+        """Why a unit is refused: a single record of it exceeds the wire budget.
 
-        A unit with hundreds of shares serialises to hundreds of kilobytes even
-        after the owners are capped, because every share keeps its own
-        description and registration entry. Returning it silently overruns the
-        caller's context; this says so and names the smaller options.
+        The window is cut to what fits before this is reached (``_fit``); a
+        unit that still does not fit carries its weight outside the paged list
+        (a full dump whose list C alone exceeds the budget, say), so the
+        message names the sheet at fault and the smaller views.
         """
-        size = len(json.dumps(result, ensure_ascii=False))
-        if size <= cls.MAX_FULL_RESPONSE_CHARS:
-            return
         page = result.get("page") or {}
         returned = page.get("returned") or 0
-        smaller = max(1, returned // 4) if returned else 10
         if detail != "full":
             blockers = (result.get("sale_blockers") or {}).get("blockers") or []
             narrow = (
@@ -1561,12 +1693,11 @@ class CadastralTools:
                 if len(blockers) > 10
                 else ""
             )
-            raise ResponseTooLargeError(
-                f"The {detail} of land-registry unit {lr_unit.lr_unit_number} are "
-                f"{size:,} characters ({returned} {cls.PAGED_LIST[detail]} in this window), "
-                f"too large to return in one response. Pass a smaller limit (e.g. "
-                f"limit={smaller}) and page through with offset (the page block says "
-                f"where to continue).{narrow}"
+            return (
+                f"The {detail} of land-registry unit {lr_unit.lr_unit_number} are {size:,} "
+                f"bytes on the wire with {returned} {cls.PAGED_LIST[detail]} in this window, "
+                f"too large to return in one response. Use owner_name or condominium_unit to "
+                f"pick the records you need, or detail=\"summary\" for the totals alone.{narrow}"
             )
         total_owners = result.get("total_owners") or 0
         sheet, sheet_size = cls._largest_sheet(result)
@@ -1578,24 +1709,18 @@ class CadastralTools:
             ),
             'detail="summary" for the totals alone',
         ]
-        # A share cap only helps while sheet B is what makes the dump large;
-        # on a unit whose weight is in the encumbrances it changes nothing.
-        if limit is None and total_owners > 0 and sheet == "ownership_sheet_b":
-            options.insert(0, "owners_limit (e.g. owners_limit=10) to cap the shares returned")
-        elif limit is not None and sheet == "ownership_sheet_b":
-            options.insert(0, f"a smaller limit (e.g. limit={smaller}), paged with offset")
-        raise ResponseTooLargeError(
-            f"A full dump of land-registry unit {lr_unit.lr_unit_number} is "
-            f"{size:,} characters ({total_owners} owner records; the largest part is "
-            f"{sheet} at {sheet_size:,} characters), too large to return in one "
-            f"response. Use {', or '.join(options)}."
+        return (
+            f"A full dump of land-registry unit {lr_unit.lr_unit_number} is {size:,} bytes "
+            f"on the wire ({total_owners} owner records; the largest part is {sheet} at "
+            f"{sheet_size:,} bytes), too large to return in one response. Use "
+            f"{', or '.join(options)}."
         )
 
     @staticmethod
     def _largest_sheet(result: dict[str, Any]) -> tuple[str, int]:
         """The sheet that makes a full dump large, and its size in characters."""
         sizes = {
-            key: len(json.dumps(value, ensure_ascii=False))
+            key: wire_size(value, structured=False)
             for key, value in result.items()
             if key.startswith(("ownership_sheet", "encumbrance_sheet", "possessory_sheet"))
         }
@@ -1762,15 +1887,24 @@ class CadastralTools:
                         if lr_unit.has_pending_plombe()
                         else {}
                     )
-                data = self._shape_lr_unit(
-                    lr_unit,
-                    detail,
-                    limit,
-                    offset,
-                    owner_name,
-                    condominium_unit=condominium_unit,
-                    plombe_detail=statuses,
-                )
+
+                def build(window_limit: int | None, lr_unit: Any = lr_unit) -> dict[str, Any]:
+                    return self._shape_lr_unit(
+                        lr_unit,
+                        detail,
+                        window_limit,
+                        offset,
+                        owner_name,
+                        condominium_unit=condominium_unit,
+                        plombe_detail=statuses,
+                    )
+
+                try:
+                    data = self._fit(build, limit, share_of=len(units))
+                except DoesNotFitError as e:
+                    raise ResponseTooLargeError(
+                        self._unit_too_large(e.result, lr_unit, detail, e.size)
+                    ) from None
                 if statuses:
                     data["plombe_detail"] = self._plombe_detail(statuses)
             except Exception as e:  # noqa: BLE001 - e.g. a full dump too large to return
@@ -2176,50 +2310,54 @@ class CadastralTools:
             )
 
         analysis = build_assembly(items, used_weights)
-        persons_window = self._window(analysis.persons, persons_offset, persons_limit)
-        response: dict[str, Any] = {
-            "generated_at": analysis.generated_at,
-            "weights": analysis.weights,
-            "totals": analysis.totals.model_dump(mode="json"),
-            "parcels": [p.model_dump(mode="json") for p in analysis.parcels],
-            "persons": [p.model_dump(mode="json") for p in persons_window],
-            "persons_page": self._page(
-                persons_offset, persons_limit, len(analysis.persons), len(persons_window)
-            ),
-            "surname_groups": [g.model_dump(mode="json") for g in analysis.surname_groups],
-            "matrix": [c.model_dump(mode="json") for c in analysis.matrix],
-            "scores": [s.model_dump(mode="json") for s in analysis.scores],
-            "blockers": (
-                [b.model_dump(mode="json", exclude_none=True) for b in analysis.blockers]
-                if include_blockers
-                else None
-            ),
-            "blocker_count": len(analysis.blockers),
-            "notes": analysis.notes + zoning_notes,
-            "total": len(parcels),
-            "successful": len(items),
-            "failed": failed,
-            "units_fetched": len(units),
-            "zoning_requested": include_zoning,
-        }
-        if export == "parcels_csv":
-            response["export"] = {"format": export, "text": parcels_csv(analysis)}
-        elif export == "persons_csv":
-            response["export"] = {"format": export, "text": persons_csv(analysis)}
-        elif export == "matrix_csv":
-            response["export"] = {"format": export, "text": matrix_csv(analysis)}
-        elif export == "blockers_csv":
-            response["export"] = {"format": export, "text": blockers_csv(analysis)}
-        elif export == "geojson":
-            response["export"] = {"format": export, **parcels_geojson(analysis, geometries)}
-        size = len(json.dumps(response, ensure_ascii=False))
-        if size > self.MAX_PARCEL_RESPONSE_CHARS:
+
+        def build(window_limit: int | None) -> dict[str, Any]:
+            persons_window = self._window(analysis.persons, persons_offset, window_limit)
+            response: dict[str, Any] = {
+                "generated_at": analysis.generated_at,
+                "weights": analysis.weights,
+                "totals": analysis.totals.model_dump(mode="json"),
+                "parcels": [p.model_dump(mode="json") for p in analysis.parcels],
+                "persons": [p.model_dump(mode="json") for p in persons_window],
+                "persons_page": self._page(
+                    persons_offset, window_limit, len(analysis.persons), len(persons_window)
+                ),
+                "surname_groups": [g.model_dump(mode="json") for g in analysis.surname_groups],
+                "matrix": [c.model_dump(mode="json") for c in analysis.matrix],
+                "scores": [s.model_dump(mode="json") for s in analysis.scores],
+                "blockers": (
+                    [b.model_dump(mode="json", exclude_none=True) for b in analysis.blockers]
+                    if include_blockers
+                    else None
+                ),
+                "blocker_count": len(analysis.blockers),
+                "notes": analysis.notes + zoning_notes,
+                "total": len(parcels),
+                "successful": len(items),
+                "failed": failed,
+                "units_fetched": len(units),
+                "zoning_requested": include_zoning,
+            }
+            if export == "parcels_csv":
+                response["export"] = {"format": export, "text": parcels_csv(analysis)}
+            elif export == "persons_csv":
+                response["export"] = {"format": export, "text": persons_csv(analysis)}
+            elif export == "matrix_csv":
+                response["export"] = {"format": export, "text": matrix_csv(analysis)}
+            elif export == "blockers_csv":
+                response["export"] = {"format": export, "text": blockers_csv(analysis)}
+            elif export == "geojson":
+                response["export"] = {"format": export, **parcels_geojson(analysis, geometries)}
+            return response
+
+        try:
+            return self._fit(build, persons_limit, page_key="persons_page")
+        except DoesNotFitError as e:
             raise ResponseTooLargeError(
-                f"The assembly analysis of {len(items)} parcels is {size:,} characters, too "
-                f"large to return in one response. Analyse fewer parcels per call, pass a "
-                f"persons_limit, set include_blockers=false, or ask for one export at a time."
-            )
-        return response
+                f"The assembly analysis of {len(items)} parcels is {e.size:,} bytes on the "
+                f"wire, too large to return in one response. Analyse fewer parcels per "
+                f"call, set include_blockers=false, or ask for one export at a time."
+            ) from None
 
     #: Parcel rows the area tools return unless asked otherwise.
     DEFAULT_AREA_LIMIT = 50
@@ -2388,25 +2526,43 @@ class CadastralTools:
         muni_code, index = await self._parcel_index(municipality)
         hits, distances = search(index)
 
-        window = self._window(hits, offset, limit)
-        rows = [
-            self._parcel_row(
-                item, **({"distance_m": distances[item.parcel_number]} if distances else {})
-            )
-            for item in window
-        ]
-        response: dict[str, Any] = {
-            "municipality_code": muni_code,
-            "query": query,
-            "parcels": rows,
-            "total": len(hits),
-            "total_area_m2": ParcelIndex.total_area(hits),
-            "page": self._page(offset, limit, len(hits), len(window)),
-            "dataset": self._gis_dataset(muni_code, index),
-        }
-        if include_geojson:
-            response["geojson"] = self._feature_collection(window)
-        return response
+
+        def build(window_limit: int | None) -> dict[str, Any]:
+            window = self._window(hits, offset, window_limit)
+            rows = [
+                self._parcel_row(
+                    item, **({"distance_m": distances[item.parcel_number]} if distances else {})
+                )
+                for item in window
+            ]
+            response: dict[str, Any] = {
+                "municipality_code": muni_code,
+                "query": query,
+                "parcels": rows,
+                "total": len(hits),
+                "total_area_m2": ParcelIndex.total_area(hits),
+                "page": self._page(offset, window_limit, len(hits), len(window)),
+                "dataset": self._gis_dataset(muni_code, index),
+            }
+            if include_geojson:
+                response["geojson"] = self._feature_collection(window)
+            return response
+
+        try:
+            return self._fit(build, limit)
+        except DoesNotFitError as e:
+            raise ResponseTooLargeError(
+                self._area_too_large("The parcels in the area", e.size, include_geojson)
+            ) from None
+
+    @staticmethod
+    def _area_too_large(what: str, size: int, include_geojson: bool) -> str:
+        """Why an area answer is refused: one parcel row alone exceeds the wire budget."""
+        outline = " Call again with include_geojson=false." if include_geojson else ""
+        return (
+            f"{what} take {size:,} bytes on the wire with one record in the window, too "
+            f"large to return in one response.{outline}"
+        )
 
     @staticmethod
     def _feature_collection(items: list[IndexedParcel]) -> dict[str, Any]:
@@ -2465,27 +2621,36 @@ class CadastralTools:
                 f"data may be stale, refresh it with download_municipality_gis(force=true)."
             )
         neighbours = index.neighbours(wanted, tolerance_m)
-        window = self._window(neighbours, offset, limit)
-        response: dict[str, Any] = {
-            "municipality_code": muni_code,
-            "parcel": self._parcel_row(seed),
-            "neighbours": [
-                self._parcel_row(
-                    n.parcel,
-                    shared_boundary_m=n.shared_boundary_m,
-                    touches_at_point=n.touches_at_point,
-                )
-                for n in window
-            ],
-            "total": len(neighbours),
-            "total_area_m2": ParcelIndex.total_area(n.parcel for n in neighbours),
-            "tolerance_m": tolerance_m,
-            "page": self._page(offset, limit, len(neighbours), len(window)),
-            "dataset": self._gis_dataset(muni_code, index),
-        }
-        if include_geojson:
-            response["geojson"] = self._feature_collection([seed, *(n.parcel for n in window)])
-        return response
+
+        def build(window_limit: int | None) -> dict[str, Any]:
+            window = self._window(neighbours, offset, window_limit)
+            response: dict[str, Any] = {
+                "municipality_code": muni_code,
+                "parcel": self._parcel_row(seed),
+                "neighbours": [
+                    self._parcel_row(
+                        n.parcel,
+                        shared_boundary_m=n.shared_boundary_m,
+                        touches_at_point=n.touches_at_point,
+                    )
+                    for n in window
+                ],
+                "total": len(neighbours),
+                "total_area_m2": ParcelIndex.total_area(n.parcel for n in neighbours),
+                "tolerance_m": tolerance_m,
+                "page": self._page(offset, window_limit, len(neighbours), len(window)),
+                "dataset": self._gis_dataset(muni_code, index),
+            }
+            if include_geojson:
+                response["geojson"] = self._feature_collection([seed, *(n.parcel for n in window)])
+            return response
+
+        try:
+            return self._fit(build, limit)
+        except DoesNotFitError as e:
+            raise ResponseTooLargeError(
+                self._area_too_large(f"The neighbours of parcel {wanted}", e.size, include_geojson)
+            ) from None
 
     async def download_municipality_gis(
         self, municipality: str, force: bool = False
@@ -2660,7 +2825,6 @@ class CadastralTools:
         possessors = sheet_dump.pop("possessors") or []
         if possessor_filter:
             possessors = [p for p in possessors if self._possessor_matches(p, possessor_filter)]
-        window = self._window(possessors, offset, limit)
         parcels = [
             {
                 "parcel_id": p.parcel_id,
@@ -2681,71 +2845,77 @@ class CadastralTools:
             for p in result.parcels
         ]
         lr_ref = result.lr_unit
-        response: dict[str, Any] = {
-            "sheet": sheet_dump,
-            "possessors_in_land_registry": result.possessors_in_land_registry,
-            "lr_unit": (
-                {"lr_unit_number": lr_ref.lr_unit_number, "main_book_id": lr_ref.main_book_id}
-                if lr_ref is not None
-                else None
-            ),
-            "possessors": window,
-            "total_possessors": len(sheet.possessors),
-            "distinct_possessors": count_distinct_persons(
-                (p.name, None) for p in sheet.possessors
-            ),
-            "page": self._page(offset, limit, len(possessors), len(window)),
-            "parcels": parcels,
-            "parcel_count": len(parcels),
-            "total_area_m2": result.total_area_m2,
-            "parcels_complete": not result.maybe_truncated,
-            "provenance": {
-                "sheet": sheet.provenance.as_dict() if sheet.provenance else None,
-                "parcels": result.parcels_provenance.as_dict(),
-            },
-        }
-        if result.possessors_in_land_registry:
-            # A harmonized sheet: the cadastre lists nobody and names the unit;
-            # the registered owners are the possessors, and the parcel search
-            # already inlined sheet B, so no unit is read.
-            owners = result.owner_rows()
-            if possessor_filter:
-                owners = [o for o in owners if self._possessor_matches(o, possessor_filter)]
-            response["owners"] = owners
-            response["total_owners"] = len(owners)
-            response["distinct_owners"] = count_distinct_persons(
-                (o.get("name"), o.get("tax_number")) for o in owners
-            )
-            response["owners_note"] = (
-                "This sheet is harmonized with the land registry: the cadastre records no "
-                "possessors of its own and refers to the land-registry unit, whose registered "
-                "owners (register land_registry) are listed under owners, read from sheet B as "
-                "the parcel search inlines it, tax numbers (OIB) included where the registry "
-                "has them. get_lr_unit gives their entries, shares in full and the encumbrances."
-            )
-            if possessor_filter:
+
+        def build(window_limit: int | None) -> dict[str, Any]:
+            window = self._window(possessors, offset, window_limit)
+            response: dict[str, Any] = {
+                "sheet": sheet_dump,
+                "possessors_in_land_registry": result.possessors_in_land_registry,
+                "lr_unit": (
+                    {"lr_unit_number": lr_ref.lr_unit_number, "main_book_id": lr_ref.main_book_id}
+                    if lr_ref is not None
+                    else None
+                ),
+                "possessors": window,
+                "total_possessors": len(sheet.possessors),
+                "distinct_possessors": count_distinct_persons(
+                    (p.name, None) for p in sheet.possessors
+                ),
+                "page": self._page(offset, window_limit, len(possessors), len(window)),
+                "parcels": parcels,
+                "parcel_count": len(parcels),
+                "total_area_m2": result.total_area_m2,
+                "parcels_complete": not result.maybe_truncated,
+                "provenance": {
+                    "sheet": sheet.provenance.as_dict() if sheet.provenance else None,
+                    "parcels": result.parcels_provenance.as_dict(),
+                },
+            }
+            if result.possessors_in_land_registry:
+                # A harmonized sheet: the cadastre lists nobody and names the unit;
+                # the registered owners are the possessors, and the parcel search
+                # already inlined sheet B, so no unit is read.
+                owners = result.owner_rows()
+                if possessor_filter:
+                    owners = [o for o in owners if self._possessor_matches(o, possessor_filter)]
+                response["owners"] = owners
+                response["total_owners"] = len(owners)
+                response["distinct_owners"] = count_distinct_persons(
+                    (o.get("name"), o.get("tax_number")) for o in owners
+                )
+                response["owners_note"] = (
+                    "This sheet is harmonized with the land registry: the cadastre records no "
+                    "possessors of its own and refers to the land-registry unit, whose registered "
+                    "owners (register land_registry) are listed under owners, read from sheet B as "
+                    "the parcel search inlines it, tax numbers (OIB) included where the registry "
+                    "has them. get_lr_unit gives their entries, shares in full and the "
+                    "encumbrances."
+                )
+                if possessor_filter:
+                    response["possessor_filter"] = possessor_filter
+                    response["filter_applied_to"] = "owners"
+                    response["matching_owners"] = len(owners)
+            elif possessor_filter:
                 response["possessor_filter"] = possessor_filter
-                response["filter_applied_to"] = "owners"
-                response["matching_owners"] = len(owners)
-        elif possessor_filter:
-            response["possessor_filter"] = possessor_filter
-            response["filter_applied_to"] = "possessors"
-            response["matching_possessors"] = len(possessors)
-        if result.maybe_truncated:
-            response["note"] = (
-                f"{len(parcels)} parcels is the most the parcel search has ever returned for "
-                f"one sheet; a server-side cap of that size is not ruled out, so the list may "
-                f"be incomplete."
-            )
-        size = len(json.dumps(response, ensure_ascii=False))
-        if size > self.MAX_PARCEL_RESPONSE_CHARS:
+                response["filter_applied_to"] = "possessors"
+                response["matching_possessors"] = len(possessors)
+            if result.maybe_truncated:
+                response["note"] = (
+                    f"{len(parcels)} parcels is the most the parcel search has ever returned for "
+                    f"one sheet; a server-side cap of that size is not ruled out, so the list may "
+                    f"be incomplete."
+                )
+            return response
+
+        try:
+            return self._fit(build, limit)
+        except DoesNotFitError as e:
             raise ResponseTooLargeError(
-                f"Possession sheet {number} is {size:,} characters ({len(window)} of "
-                f"{len(possessors)} possessor records, {len(parcels)} parcels), too large to "
-                f"return in one response. Pass a smaller limit and page with offset, or "
-                f"possessor_name to pick the records you need."
-            )
-        return response
+                f"Possession sheet {number} is {e.size:,} bytes on the wire with one of "
+                f"{len(possessors)} possessor records and {len(parcels)} parcels, too large "
+                f"to return in one response. Use possessor_name to pick the records you "
+                f"need."
+            ) from None
 
     async def find_possession_sheet(self, sheet_number: str, municipality: str) -> dict[str, Any]:
         """

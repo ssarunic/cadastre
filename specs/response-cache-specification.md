@@ -7,8 +7,8 @@ interface: in-process memory, memory plus disk, a separate cache process, and a
 distributed cache.
 
 Status: Phase 1 implemented (the cache package with the memory layer, the
-client hook, `refresh`, `fetched_at`, the `info` line); section 11 and phases
-2 to 4 are open.
+client hook, `refresh`, `fetched_at`, the `info` line, and the wire budget
+and structured-output flag of section 11); phases 2 to 4 are open.
 
 ## Scope Notice
 
@@ -382,7 +382,8 @@ CHANGELOG.md
 ## 11. Companion Change: Response-Size Ceilings
 
 Not part of the cache, but the same investigation found it and the cache makes the
-remedy (paging) cheap, so phase 1 ships both.
+remedy (paging) cheap, so phase 1 ships both. Implemented in `cadastral_mcp.tools`
+(`wire_size`, `fit_window`, `CadastralTools._fit`) and `cadastral_mcp.config`.
 
 ### 11.1 What the client receives
 
@@ -419,7 +420,10 @@ Rather than adding fixed caps to those three, every paged tool moves to one rule
   `page.truncated` and `page.next_offset` as it does for an explicit limit. No refusal,
   no guessing a limit.
 - An explicit `limit` that does not fit is cut the same way; the `page` block states
-  the limit actually applied, so the agent sees that its request was reduced.
+  the limit actually applied (`limit`) next to the one asked for (`requested_limit`),
+  so the agent sees that its request was reduced.
+- A call for several parcels or units divides the budget between its entries, so the
+  response stays within it as a whole.
 - A **single record** that does not fit on its own (one parcel entry with hundreds of
   possessors, a full unit dump, a zoning answer with polygons) is the only case that is
   still refused, with the existing message naming the smaller views, and in phase 2

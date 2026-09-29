@@ -49,6 +49,8 @@ Environment Variables:
   CADASTRAL_LANG            Language: hr, en, de, it (default: hr)
   CADASTRAL_CACHE           Response cache: memory | off (default: memory)
   CADASTRAL_CACHE_MEMORY_MB Byte budget of the memory cache (default: 64)
+  MCP_RESULT_BUDGET_BYTES   Bytes one tool result may take on the wire (default: 800000)
+  MCP_STRUCTURED_OUTPUT     on | off: send the structured copy of results (default: on)
   MCP_HTTP_HOST             HTTP server host (default: 127.0.0.1)
   MCP_HTTP_PORT             HTTP server port (default: 8080)
   MCP_HTTP_KEYS             Access keys, comma-separated, read from .env on every check
