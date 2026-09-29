@@ -58,8 +58,6 @@ print(f"Possessors: {len(response_data['possessionSheets'][0]['possessors'])}")
 
 # Try to import and validate
 try:
-    import sys
-    sys.path.insert(0, '/Users/sasasarunic/_Sources/boljeuredjenazemlja/src')
     from cadastral_api.models.entities import ParcelInfo
 
     parcel = ParcelInfo.model_validate(response_data)

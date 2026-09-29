@@ -21,8 +21,8 @@ tooling). Naming rules are in [specs/naming-conventions.md](../specs/naming-conv
 ## Setup
 
 ```bash
-git clone https://github.com/ssarunic/boljeuredjenazemlja.git
-cd boljeuredjenazemlja
+git clone https://github.com/ssarunic/cadastre.git
+cd cadastre
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e "./api[dev]" -e "./cli[dev]" -e "./mcp[dev]"
 pip install -r mock-server/requirements.txt

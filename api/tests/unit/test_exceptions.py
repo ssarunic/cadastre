@@ -1,10 +1,6 @@
 #!/usr/bin/env python3.12
 """Test the CadastralAPIError string representation."""
 
-import sys
-
-sys.path.insert(0, '/Users/sasasarunic/_Sources/boljeuredjenazemlja/src')
-
 from cadastral_api.exceptions import CadastralAPIError, ErrorType
 
 # Test 1: Error with details
