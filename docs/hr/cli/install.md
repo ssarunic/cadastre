@@ -29,8 +29,8 @@ tako mora ostati.
 ## Korak 1: dohvatite repozitorij i stvorite okruženje
 
 ```bash
-git clone https://github.com/ssarunic/boljeuredjenazemlja.git
-cd boljeuredjenazemlja
+git clone https://github.com/ssarunic/cadastre.git
+cd cadastre
 python3 -m venv .venv
 source .venv/bin/activate
 ```

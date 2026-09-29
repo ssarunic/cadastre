@@ -1,6 +1,6 @@
 # File & Folder Naming Conventions
 
-This document defines the official naming conventions for the Boljeuredjenazemlja monorepo. **All new code and files must follow these conventions.**
+This document defines the official naming conventions for the Cadastre monorepo. **All new code and files must follow these conventions.**
 
 ---
 
@@ -21,7 +21,7 @@ Shared repository-level resources go in the root.
 ## 1. Top-Level Directory Structure
 
 ```text
-boljeuredjenazemlja/
+cadastre/
 ├── api/                    # Python SDK project
 │   ├── src/
 │   ├── tests/
@@ -340,7 +340,7 @@ mock-server/
 ### Repository Root
 
 ```text
-boljeuredjenazemlja/
+cadastre/
 ├── api/                        # API project
 ├── cli/                        # CLI project
 ├── mcp/                        # MCP project

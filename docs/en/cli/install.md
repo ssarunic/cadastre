@@ -27,8 +27,8 @@ must stay that way.
 ## Step 1: fetch the repository and create an environment
 
 ```bash
-git clone https://github.com/ssarunic/boljeuredjenazemlja.git
-cd boljeuredjenazemlja
+git clone https://github.com/ssarunic/cadastre.git
+cd cadastre
 python3 -m venv .venv
 source .venv/bin/activate
 ```

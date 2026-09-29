@@ -3,4 +3,4 @@
 # in a starlette with published advisories. (The MCP server no longer depends
 # on fastapi; the SDK's own starlette and uvicorn serve its HTTP transport.)
 fastapi==0.141.1
-uvicorn[standard]==0.52.4
+uvicorn[standard]==0.53.0

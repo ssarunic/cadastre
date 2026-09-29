@@ -2343,6 +2343,10 @@ class CadastralTools:
         if offset < 0:
             raise ValueError(f"offset must not be negative, got {offset}")
 
+        # Each branch validates its area, records the query as understood and
+        # binds the search to run once the index is loaded, so the geometry
+        # values never cross branches; ``distances`` is filled by a radius query.
+        wanted_relation: Relation = "within" if relation == "within" else "intersects"
         query: dict[str, Any]
         if bbox is not None:
             if len(bbox) != 4:
@@ -2351,32 +2355,38 @@ class CadastralTools:
             high = self._metric_point(bbox[2:], "bbox corner")
             if low[0] > high[0] or low[1] > high[1]:
                 raise ValueError("bbox must be [min_x, min_y, max_x, max_y] with min <= max")
-            query = {"bbox": [*low, *high], "relation": relation}
+            bounds = (*low, *high)
+            query = {"bbox": list(bounds), "relation": relation}
+
+            def search(index: ParcelIndex) -> tuple[list[IndexedParcel], dict[str, float]]:
+                return index.in_bbox(bounds, wanted_relation), {}
+
         elif polygon is not None:
             ring = parse_ring(polygon)
             self._metric_point(ring[0], "polygon vertex")
             query = {"polygon": [list(p) for p in ring], "relation": relation}
+
+            def search(index: ParcelIndex) -> tuple[list[IndexedParcel], dict[str, float]]:
+                return index.in_polygon(ring, wanted_relation), {}
+
         else:
             assert center is not None and radius_m is not None
             point = self._metric_point(center, "center")
             if radius_m <= 0:
                 raise ValueError(f"radius_m must be positive, got {radius_m}")
-            query = {"center": list(point), "radius_m": float(radius_m)}
+            radius = float(radius_m)
+            query = {"center": list(point), "radius_m": radius}
+
+            def search(index: ParcelIndex) -> tuple[list[IndexedParcel], dict[str, float]]:
+                radius_hits = index.within_radius(point[0], point[1], radius)
+                return (
+                    [hit.parcel for hit in radius_hits],
+                    {hit.parcel.parcel_number: hit.distance_m for hit in radius_hits},
+                )
 
         logger.info(f"Finding parcels in {municipality} by {modes[0]}")
         muni_code, index = await self._parcel_index(municipality)
-
-        wanted_relation: Relation = "within" if relation == "within" else "intersects"
-        distances: dict[str, float] = {}
-        if bbox is not None:
-            hits = index.in_bbox((*low, *high), wanted_relation)
-        elif polygon is not None:
-            hits = index.in_polygon(ring, wanted_relation)
-        else:
-            assert radius_m is not None
-            radius_hits = index.within_radius(point[0], point[1], float(radius_m))
-            hits = [hit.parcel for hit in radius_hits]
-            distances = {hit.parcel.parcel_number: hit.distance_m for hit in radius_hits}
+        hits, distances = search(index)
 
         window = self._window(hits, offset, limit)
         rows = [

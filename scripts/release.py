@@ -27,7 +27,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
-REPO_URL = "https://github.com/ssarunic/boljeuredjenazemlja"
+REPO_URL = "https://github.com/ssarunic/cadastre"
 RELEASE_BRANCH = "main"
 
 SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
