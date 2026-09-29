@@ -26,6 +26,11 @@ number and one tag.
   self-contained HTML file. The same text for pasting into Claude Code is in
   `docs/due-diligence-report-prompt.md`.
 
+### Changed
+
+- Repository renamed from `boljeuredjenazemlja` to `cadastre`; the old
+  GitHub URL redirects. Package, command and module names are unchanged.
+
 ## [0.3.0] - 2026-09-16
 
 ### Security
@@ -748,7 +753,7 @@ was introduced.
 - Bilingual CLI user documentation (`docs/en/cli/`, `docs/hr/cli/`) generated
   by `scripts/build_docs.py`, with documentation and terminology gates in CI.
 
-[Unreleased]: https://github.com/ssarunic/boljeuredjenazemlja/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/ssarunic/boljeuredjenazemlja/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/ssarunic/boljeuredjenazemlja/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/ssarunic/boljeuredjenazemlja/releases/tag/v0.1.0
+[Unreleased]: https://github.com/ssarunic/cadastre/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/ssarunic/cadastre/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/ssarunic/cadastre/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/ssarunic/cadastre/releases/tag/v0.1.0

@@ -75,8 +75,8 @@ Everything the CLI does is also available as Python calls and as MCP tools.
 ## Get started
 
 ```bash
-git clone https://github.com/ssarunic/boljeuredjenazemlja.git
-cd boljeuredjenazemlja
+git clone https://github.com/ssarunic/cadastre.git
+cd cadastre
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ./api -e ./cli -e ./mcp
 pip install -r mock-server/requirements.txt

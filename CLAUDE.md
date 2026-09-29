@@ -464,7 +464,7 @@ for result in summary.results:
 ### Target Structure (Monorepo)
 
 ```text
-boljeuredjenazemlja/
+cadastre/
 ├── api/                          # Python SDK project
 │   ├── src/cadastral_api/
 │   │   ├── client/              # HTTP client with rate limiting
