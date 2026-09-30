@@ -12,20 +12,10 @@ lies in a building area, and export parcel boundaries for GIS tools.
 > to use that server and its data (terms of service, data protection). You do so at
 > your own risk. Full terms in [docs/legal.md](docs/legal.md).
 
-Requires Python 3.12 or newer.
-
 ## Ask in plain language
 
 Connect the MCP server to Claude Code (or any MCP client) and ask the way you
-would ask a colleague. With the tool installed and the practice server running
-(see [Get started](#get-started)), from the activated environment:
-
-```bash
-claude mcp add cadastral -e CADASTRAL_API_BASE_URL=http://localhost:8000 \
-  -- "$(which cadastral-mcp)" --transport stdio
-```
-
-The answers below are Claude Code's, against the practice data, shortened.
+would ask a colleague.
 
 ### Example 1: Look up a parcel in the cadastre
 
@@ -110,30 +100,13 @@ steps are in the [full page](docs/images/parcel-report-full.png).
 For Claude Desktop, ChatGPT and a hosted server, see the
 [MCP usage guide](docs/mcp-usage-guide.md).
 
-## From the terminal and from Python
+## From the terminal
 
-**From the terminal.** One line from a parcel number to owners, parcels,
+One line from a parcel number to owners, parcels,
 encumbrances, and pending entries (plombe):
 
 ```bash
 cadastral get-lr-unit --from-parcel 103/2 -m SAVAR --all --plombe-detail
-```
-
-The same program answers to `uz` with Croatian command names, so
-`uz čestica 103/2 -ko SAVAR` works too. Output samples are on the
-[get-lr-unit page](docs/en/cli/commands/get-lr-unit.md).
-
-**From Python.**
-
-```python
-from cadastral_api import CadastralAPIClient
-
-with CadastralAPIClient() as client:
-    unit = client.get_lr_unit_from_parcel("103/2", "SAVAR")
-    for owner in unit.get_all_owners():
-        print(owner.name)
-    if unit.has_pending_plombe():
-        print("A change is pending on this unit")
 ```
 
 ## What you can do
