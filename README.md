@@ -27,7 +27,7 @@ claude mcp add cadastral -e CADASTRAL_API_BASE_URL=http://localhost:8000 \
 
 The answers below are Claude Code's, against the practice data, shortened.
 
-### The cadastre
+### Example 1: Look up a parcel in the cadastre
 
 > **You:** What is parcel 396/1 in Savar?
 >
@@ -41,7 +41,7 @@ The answers below are Claude Code's, against the practice data, shortened.
 > registered owners in the land registry can be different people. I can look
 > them up if you want them. …
 
-### Spatial plans, several parcels at once
+### Example 2: Check several parcels against the spatial plans
 
 > **You:** Which of parcels 103/2, 45 and 396/1 in Savar are in a building area?
 >
@@ -60,7 +60,7 @@ The answers below are Claude Code's, against the practice data, shortened.
 > county planning institutes' reading of the plans and may differ from the
 > plans in force. …
 
-### All three sources together
+### Example 3: Combine all three sources before a purchase
 
 > **You:** I'm thinking of buying parcel 103/2 in Savar. Check the cadastre, the
 > land registry and the spatial plan and tell me what I should know.
@@ -93,7 +93,7 @@ The answers below are Claude Code's, against the practice data, shortened.
 > make sure both co-owners sign and check their OIBs, check road access, and
 > have a lawyer or notary review the contract. …
 
-### A report with a map
+### Example 4: Get a one-page report with a map
 
 > **You:** I'm a foreign investor thinking of buying parcel 103/2 in Savar.
 > Check the cadastre, the land registry and the spatial plan, and make me a
