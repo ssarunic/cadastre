@@ -1,15 +1,16 @@
 # Croatian Cadastral API Client
 
-Read the cadastre and the land registry from a terminal, from Python, or from an
-AI assistant. Look up a parcel, see who owns it, read the land registry unit with
-its encumbrances and pending entries, and export parcel boundaries for GIS tools.
+Read the cadastre, the land registry and the spatial plans from a terminal, from
+Python, or from an AI assistant. Look up a parcel, see who owns it, read the land
+registry unit with its encumbrances and pending entries, check whether the parcel
+lies in a building area, and export parcel boundaries for GIS tools.
 
 > **Demonstration project with practice data.** This repository shows how a modern
 > cadastral API could work. It ships with a mock server, and every example here runs
 > against it. Before pointing it at any other server, including the official Croatian
-> cadastre and land registry, verify that you have the rights to use that server and
-> its data (terms of service, data protection). You do so at your own risk. Full terms
-> in [docs/legal.md](docs/legal.md).
+> cadastre, land registry and spatial-plan services, verify that you have the rights
+> to use that server and its data (terms of service, data protection). You do so at
+> your own risk. Full terms in [docs/legal.md](docs/legal.md).
 
 Requires Python 3.12 or newer.
 
