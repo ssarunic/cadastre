@@ -93,6 +93,20 @@ The answers below are Claude Code's, against the practice data, shortened.
 > make sure both co-owners sign and check their OIBs, check road access, and
 > have a lawyer or notary review the contract. …
 
+### A report with a map
+
+> **You:** I'm a foreign investor thinking of buying parcel 103/2 in Savar.
+> Check the cadastre, the land registry and the spatial plan, and make me a
+> one-page report in plain English as report.html: a map of the parcel with its
+> neighbours 45 and 396/1 and the building areas around them (outlines only, no
+> base map tiles), the main facts, the risks, and what to do next.
+
+Claude Code draws the map from the parcel and zone outlines the tools return,
+and writes the report around it. The top of it is below; the risks and next
+steps are in the [full page](docs/images/parcel-report-full.png).
+
+[![One-page report on parcel 103/2: a map of the parcel inside the Savar settlement building area, with neighbouring parcels and a tourist camp zone, beside the main facts](docs/images/parcel-report.png)](docs/images/parcel-report-full.png)
+
 For Claude Desktop, ChatGPT and a hosted server, see the
 [MCP usage guide](docs/mcp-usage-guide.md).
 
